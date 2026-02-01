@@ -1,6 +1,6 @@
-from .user import User, UserManager
+from .admin_user import Admin
 from .customer import Customer
 from .provider import Provider
-from .admin_user import Admin
+from .user import User, UserManager
 
 __all__ = ['User', 'UserManager', 'Customer', 'Provider', 'Admin']

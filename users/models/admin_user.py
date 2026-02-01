@@ -1,10 +1,11 @@
 from django.db import models
+
 from .user import User
 
 
 class Admin(User):
     """Admin class inheriting from User"""
-    
+
     # Permissions
     can_manage_users = models.BooleanField(
         default=True,
@@ -22,15 +23,15 @@ class Admin(User):
         default=True,
         help_text="Can view platform analytics and reports"
     )
-    
+
     class Meta:
         db_table = 'admins'
         verbose_name = 'Admin'
         verbose_name_plural = 'Admins'
-    
+
     def __str__(self):
         return f"Admin: {self.get_full_name()}"
-    
+
     def has_permission(self, permission_type):
         """Check if admin has specific permission"""
         permission_map = {

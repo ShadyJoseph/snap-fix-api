@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Customer, Provider, Admin
+
+from .models import Admin, Customer, Provider, User
 
 
 @admin.register(User)
@@ -9,7 +10,7 @@ class UserAdmin(BaseUserAdmin):
     list_filter = ('is_active', 'is_verified', 'is_staff')
     search_fields = ('email', 'first_name', 'last_name', 'phone')
     ordering = ('-date_joined',)
-    
+
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'phone', 'profile_picture', 'address')}),
@@ -17,14 +18,14 @@ class UserAdmin(BaseUserAdmin):
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'is_verified')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
     )
-    
+
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
             'fields': ('email', 'password1', 'password2', 'first_name', 'last_name'),
         }),
     )
-    
+
     def get_user_type(self, obj):
         return obj.get_user_type()
     get_user_type.short_description = 'User Type'
@@ -36,7 +37,7 @@ class CustomerAdmin(admin.ModelAdmin):
     search_fields = ('email', 'first_name', 'last_name', 'phone')
     list_filter = ('is_active', 'is_verified')
     readonly_fields = ('date_joined', 'last_login', 'updated_at')
-    
+
     fieldsets = (
         ('User Info', {'fields': ('email', 'first_name', 'last_name', 'phone', 'profile_picture')}),
         ('Location', {'fields': ('address', 'latitude', 'longitude')}),
@@ -49,13 +50,13 @@ class CustomerAdmin(admin.ModelAdmin):
 
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
-    list_display = ('email', 'first_name', 'last_name', 'verification_status', 'average_rating', 
+    list_display = ('email', 'first_name', 'last_name', 'verification_status', 'average_rating',
                     'total_jobs', 'is_available', 'date_joined')
     list_filter = ('verification_status', 'is_available', 'is_verified')
     search_fields = ('email', 'first_name', 'last_name', 'business_name', 'phone')
-    readonly_fields = ('date_joined', 'last_login', 'updated_at', 'total_earnings', 
+    readonly_fields = ('date_joined', 'last_login', 'updated_at', 'total_earnings',
                        'total_jobs', 'completed_jobs', 'average_rating', 'total_reviews')
-    
+
     fieldsets = (
         ('User Info', {'fields': ('email', 'first_name', 'last_name', 'phone', 'profile_picture')}),
         ('Business Info', {'fields': ('business_name', 'bio', 'years_of_experience')}),
@@ -67,13 +68,13 @@ class ProviderAdmin(admin.ModelAdmin):
         ('Status', {'fields': ('is_active', 'is_verified')}),
         ('Timestamps', {'fields': ('date_joined', 'last_login', 'updated_at')}),
     )
-    
+
     actions = ['verify_providers', 'reject_providers']
-    
+
     def verify_providers(self, request, queryset):
         queryset.update(verification_status='verified', is_verified=True)
     verify_providers.short_description = "Verify selected providers"
-    
+
     def reject_providers(self, request, queryset):
         queryset.update(verification_status='rejected')
     reject_providers.short_description = "Reject selected providers"
@@ -81,17 +82,16 @@ class ProviderAdmin(admin.ModelAdmin):
 
 @admin.register(Admin)
 class AdminProfileAdmin(admin.ModelAdmin):
-    list_display = ('email', 'first_name', 'last_name', 'can_manage_users', 
+    list_display = ('email', 'first_name', 'last_name', 'can_manage_users',
                     'can_manage_services', 'date_joined')
     list_filter = ('can_manage_users', 'can_manage_services', 'can_manage_payments')
     search_fields = ('email', 'first_name', 'last_name')
     readonly_fields = ('date_joined', 'last_login', 'updated_at')
-    
+
     fieldsets = (
         ('User Info', {'fields': ('email', 'first_name', 'last_name', 'phone', 'profile_picture')}),
-        ('Permissions', {'fields': ('can_manage_users', 'can_manage_services', 
+        ('Permissions', {'fields': ('can_manage_users', 'can_manage_services',
                                     'can_manage_payments', 'can_view_analytics')}),
         ('Status', {'fields': ('is_active', 'is_staff', 'is_superuser')}),
         ('Timestamps', {'fields': ('date_joined', 'last_login', 'updated_at')}),
     )
-    
