@@ -1,10 +1,10 @@
 from django.db import models
 
-from .user import User
+from apps.user.models import User
 
 
 class Customer(User):
-    """Customer class inheriting from User"""
+    """Customer model for users who book services"""
 
     # Wallet
     wallet_balance = models.DecimalField(
@@ -20,9 +20,9 @@ class Customer(User):
         help_text="Total cashback earned"
     )
 
-    # Favorites (will reference Provider - forward reference)
+    # Favorites (forward reference to Provider)
     favorite_providers = models.ManyToManyField(
-        'Provider',
+        'provider.Provider',
         blank=True,
         related_name='favorited_by'
     )
@@ -43,12 +43,13 @@ class Customer(User):
 
     def add_to_wallet(self, amount):
         """Add money to wallet"""
-        self.wallet_balance += amount
-        self.save(update_fields=['wallet_balance'])
+        if amount > 0:
+            self.wallet_balance += amount
+            self.save(update_fields=['wallet_balance'])
 
     def deduct_from_wallet(self, amount):
-        """Deduct money from wallet"""
-        if self.wallet_balance >= amount:
+        """Deduct money from wallet if sufficient balance"""
+        if amount > 0 and self.wallet_balance >= amount:
             self.wallet_balance -= amount
             self.save(update_fields=['wallet_balance'])
             return True
@@ -56,9 +57,10 @@ class Customer(User):
 
     def add_cashback(self, amount):
         """Add cashback to wallet and total cashback"""
-        self.wallet_balance += amount
-        self.total_cashback += amount
-        self.save(update_fields=['wallet_balance', 'total_cashback'])
+        if amount > 0:
+            self.wallet_balance += amount
+            self.total_cashback += amount
+            self.save(update_fields=['wallet_balance', 'total_cashback'])
 
     def increment_bookings(self):
         """Increment total bookings counter"""

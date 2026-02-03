@@ -1,10 +1,10 @@
 from django.db import models
 
-from .user import User
+from apps.user.models import User
 
 
-class Admin(User):
-    """Admin class inheriting from User"""
+class Staff(User):
+    """Staff model for managing admin dashboard"""
 
     # Permissions
     can_manage_users = models.BooleanField(
@@ -25,15 +25,15 @@ class Admin(User):
     )
 
     class Meta:
-        db_table = 'admins'
-        verbose_name = 'Admin'
-        verbose_name_plural = 'Admins'
+        db_table = 'staff'
+        verbose_name = 'Staff'
+        verbose_name_plural = 'Staff'
 
     def __str__(self):
-        return f"Admin: {self.get_full_name()}"
+        return f"Staff: {self.get_full_name()}"
 
     def has_permission(self, permission_type):
-        """Check if admin has specific permission"""
+        """Check if staff has specific permission"""
         permission_map = {
             'users': self.can_manage_users,
             'services': self.can_manage_services,
@@ -41,3 +41,8 @@ class Admin(User):
             'analytics': self.can_view_analytics,
         }
         return permission_map.get(permission_type, False)
+
+    def save(self, *args, **kwargs):
+        """Ensure staff users have is_staff flag set"""
+        self.is_staff = True
+        super().save(*args, **kwargs)

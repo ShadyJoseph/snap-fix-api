@@ -34,7 +34,8 @@ SECRET_KEY = os.getenv(
 DEBUG = os.getenv("DEBUG", "True") == "True"
 
 ALLOWED_HOSTS = (
-    os.getenv("ALLOWED_HOSTS", "").split(",") if os.getenv("ALLOWED_HOSTS") else []
+    os.getenv("ALLOWED_HOSTS", "").split(
+        ",") if os.getenv("ALLOWED_HOSTS") else []
 )
 
 
@@ -48,8 +49,10 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
-    'users',
-    # Add your apps here
+    'apps.user',
+    'apps.customer',
+    'apps.provider',
+    'apps.staff',
 ]
 
 MIDDLEWARE = [
@@ -153,4 +156,4 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 10,
 }
-AUTH_USER_MODEL = 'users.User'
+AUTH_USER_MODEL = 'user.User'
