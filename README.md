@@ -96,7 +96,7 @@ DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 
 DB_NAME=snapfix
-DB_USER=snapfix_user
+DB_USER=snapfix
 DB_PASSWORD=your_password
 DB_HOST=localhost
 DB_PORT=5432
