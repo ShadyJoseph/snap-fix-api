@@ -4,6 +4,7 @@ from .choices import OnboardingStatus
 
 
 class ProviderOnboardingManager(models.Manager):
+    """Custom manager for ProviderOnboarding"""
 
     def pending(self):
         return self.filter(status=OnboardingStatus.PENDING)

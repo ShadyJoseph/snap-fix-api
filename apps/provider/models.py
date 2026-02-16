@@ -1,13 +1,24 @@
 import uuid
+from datetime import date
 
-from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.core.validators import (
+    FileExtensionValidator,
+    MinValueValidator,
+    RegexValidator,
+)
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.user.models import User
 
 from .choices import OnboardingStatus, ProviderVerificationStatus
 from .managers import ProviderOnboardingManager
+
+phone_validator = RegexValidator(
+    regex=r'^(\+?20)?01[0125]\d{8}$',
+    message="Phone number must be a valid Egyptian mobile number (e.g., 01012345678 or +201012345678)."
+)
 
 
 class Provider(User):
@@ -24,13 +35,15 @@ class Provider(User):
         upload_to='provider_documents/',
         blank=True,
         null=True,
-        help_text="ID document for verification"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        help_text="ID document for verification (Max 5MB)"
     )
     certification = models.FileField(
         upload_to='provider_certifications/',
         blank=True,
         null=True,
-        help_text="Professional certifications"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        help_text="Professional certifications (Max 5MB)"
     )
 
     # Service Information
@@ -131,10 +144,23 @@ class Provider(User):
         indexes = [
             models.Index(fields=['verification_status']),
             models.Index(fields=['is_available']),
+            models.Index(fields=['region', 'is_available']),
         ]
 
     def __str__(self):
         return f"Provider: {self.get_full_name()}"
+
+    def clean(self):
+        """Validate file sizes"""
+        super().clean()
+        if self.id_document and self.id_document.size > 5 * 1024 * 1024:
+            raise ValidationError({
+                'id_document': 'File size must not exceed 5MB'
+            })
+        if self.certification and self.certification.size > 5 * 1024 * 1024:
+            raise ValidationError({
+                'certification': 'File size must not exceed 5MB'
+            })
 
     def add_earnings(self, amount):
         """Add earnings from a completed job"""
@@ -193,12 +219,11 @@ class ProviderOnboarding(models.Model):
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True, db_index=True)
-    phone = models.CharField(max_length=20)
-    date_of_birth = models.DateField(help_text="Date of birth")
-    age = models.IntegerField(
-        validators=[MinValueValidator(18), MaxValueValidator(100)],
-        help_text="Must be 18 or older"
+    phone = models.CharField(
+        max_length=20,
+        validators=[phone_validator]
     )
+    date_of_birth = models.DateField(help_text="Date of birth")
 
     # Address Information
     address = models.TextField()
@@ -235,27 +260,32 @@ class ProviderOnboarding(models.Model):
     # Documents
     nid_front = models.ImageField(
         upload_to='onboarding/nid/front/',
-        help_text="National ID - Front side"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        help_text="National ID - Front side (Max 5MB)"
     )
     nid_back = models.ImageField(
         upload_to='onboarding/nid/back/',
-        help_text="National ID - Back side"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        help_text="National ID - Back side (Max 5MB)"
     )
     police_clearance_certificate = models.FileField(
         upload_to='onboarding/pcc/',
-        help_text="Police Clearance Certificate (PCC)"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        help_text="Police Clearance Certificate (Max 5MB)"
     )
     professional_certificate = models.FileField(
         upload_to='onboarding/certificates/',
         blank=True,
         null=True,
-        help_text="Professional certificates (optional)"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        help_text="Professional certificates - optional (Max 5MB)"
     )
     profile_photo = models.ImageField(
         upload_to='onboarding/photos/',
         blank=True,
         null=True,
-        help_text="Profile photo"
+        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png'])],
+        help_text="Profile photo - optional (Max 5MB)"
     )
 
     # FSM State
@@ -315,6 +345,7 @@ class ProviderOnboarding(models.Model):
         indexes = [
             models.Index(fields=['status', '-submitted_at']),
             models.Index(fields=['email']),
+            models.Index(fields=['region', 'category', 'status']),
         ]
 
     def __str__(self):
@@ -322,6 +353,48 @@ class ProviderOnboarding(models.Model):
 
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def age(self):
+        """Calculate age from date of birth"""
+        today = date.today()
+        born = self.date_of_birth
+        return today.year - born.year - (
+            (today.month, today.day) < (born.month, born.day)
+        )
+
+    def clean(self):
+        """Model-level validation"""
+        super().clean()
+
+        # Validate age
+        if self.date_of_birth and self.age < 18:
+            raise ValidationError({
+                'date_of_birth': 'Applicant must be 18 or older'
+            })
+
+        # Check email uniqueness across User model
+        if not self.pk:  # Only on creation
+            if User.objects.filter(email=self.email).exists():
+                raise ValidationError({
+                    'email': 'This email is already registered in the system.'
+                })
+
+        # Validate file sizes
+        files = [
+            ('nid_front', self.nid_front),
+            ('nid_back', self.nid_back),
+            ('police_clearance_certificate', self.police_clearance_certificate),
+            ('professional_certificate', self.professional_certificate),
+            ('profile_photo', self.profile_photo),
+        ]
+
+        for field_name, file_field in files:
+            if file_field and hasattr(file_field, 'size'):
+                if file_field.size > 5 * 1024 * 1024:  # 5MB
+                    raise ValidationError({
+                        field_name: 'File size must not exceed 5MB'
+                    })
 
     # FSM State Checks
     def can_review(self):
@@ -353,6 +426,7 @@ class ProviderOnboarding(models.Model):
         self.save()
         return True
 
+    @transaction.atomic
     def approve(self, admin_user):
         """Approve application and create provider account"""
         if not self.can_approve():
@@ -360,9 +434,14 @@ class ProviderOnboarding(models.Model):
                 f"Cannot approve from {self.get_status_display()}"
             )
 
-        # Create Provider account
-        provider = Provider.objects.create(
+        # Generate temporary password
+        from django.utils.crypto import get_random_string
+        temp_password = get_random_string(12)
+
+        # Create Provider account using create_user
+        provider = Provider.objects.create_user(
             email=self.email,
+            password=temp_password,
             first_name=self.first_name,
             last_name=self.last_name,
             phone=self.phone,
@@ -375,6 +454,16 @@ class ProviderOnboarding(models.Model):
             is_verified=True,
             is_active=True,
         )
+
+        # Transfer documents to provider
+        if self.nid_front:
+            provider.id_document = self.nid_front
+        if self.professional_certificate:
+            provider.certification = self.professional_certificate
+        if self.profile_photo:
+            provider.profile_picture = self.profile_photo
+
+        provider.save()
 
         # Add category
         provider.categories.add(self.category)
@@ -400,6 +489,7 @@ class ProviderOnboarding(models.Model):
         self.rejection_reason = reason
         self.rejected_at = timezone.now()
         self.save()
+
         return True
 
     def request_changes(self, admin_user, change_requests):
@@ -414,4 +504,5 @@ class ProviderOnboarding(models.Model):
         self.change_requests = change_requests
         self.reviewed_at = timezone.now()
         self.save()
+
         return True
