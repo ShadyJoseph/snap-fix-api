@@ -1,4 +1,3 @@
-from .serializers import CustomerLoginSerializer, CustomerRegisterSerializer, CustomerSerializer, CustomerProfileSerializer
 from knox.models import AuthToken
 from knox.views import LogoutView as KnoxLogoutView
 from rest_framework import generics, permissions, status
@@ -6,6 +5,7 @@ from rest_framework.response import Response
 
 from .serializers import (
     CustomerLoginSerializer,
+    CustomerProfileSerializer,
     CustomerRegisterSerializer,
     CustomerSerializer,
 )
