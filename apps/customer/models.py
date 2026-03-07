@@ -1,7 +1,8 @@
+from decimal import Decimal
+
 from django.db import models
 
 from apps.user.models import User
-from decimal import Decimal
 
 
 class Customer(User):
