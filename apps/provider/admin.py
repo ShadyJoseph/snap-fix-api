@@ -21,7 +21,7 @@ TERMINAL_STATUSES = (OnboardingStatus.APPROVED, OnboardingStatus.REJECTED)
 
 
 # ─────────────────────────────────────────────────────────────
-# Provider Admin — view / edit / delete only (no add)
+# Provider Admin
 # ─────────────────────────────────────────────────────────────
 
 @admin.register(Provider)
@@ -55,9 +55,6 @@ class ProviderAdmin(admin.ModelAdmin):
         ('Business', {
             'fields': ('business_name', 'bio'),
         }),
-        ('Verification', {
-            'fields': ('verification_status', 'id_document', 'certification'),
-        }),
         ('Financial', {
             'fields': ('total_earnings', 'available_balance'),
         }),
@@ -74,7 +71,7 @@ class ProviderAdmin(admin.ModelAdmin):
             ),
         }),
         ('Status', {
-            'fields': ('is_active', 'is_verified'),
+            'fields': ('is_active', 'is_verified', 'verification_status'),
         }),
         ('Timestamps', {
             'fields': ('date_joined', 'last_login', 'updated_at'),
@@ -141,7 +138,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         required=False,
         widget=forms.PasswordInput(render_value=True),
         label="Provider Password",
-        help_text="Required when approving. Min 8 characters.",
+        help_text="Required only for walk-ins (no prior app registration). Min 8 characters.",
     )
     confirm_password = forms.CharField(
         required=False,
@@ -161,34 +158,61 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Limit reviewer dropdown to active staff only
+
+        # Limit reviewer to active staff only
         self.fields['reviewed_by'].queryset = Staff.objects.filter(
             is_active=True)
+
+        # Limit applicant dropdown to pending, inactive providers only
+        self.fields['applicant'].queryset = Provider.objects.filter(
+            is_active=False,
+            verification_status=ProviderVerificationStatus.PENDING,
+        )
+        self.fields['applicant'].required = False
+
+        # Prefill personal fields from the linked applicant
+        instance = kwargs.get('instance')
+        if instance and instance.applicant_id:
+            applicant = instance.applicant
+            prefill = {
+                'first_name': applicant.first_name,
+                'last_name':  applicant.last_name,
+                'email':      applicant.email,
+                'phone':      applicant.phone or '',
+            }
+            for field, value in prefill.items():
+                if not self.initial.get(field):
+                    self.initial[field] = value
 
     def clean(self):
         cleaned = super().clean()
         status = cleaned.get('status')
         password = cleaned.get('set_password')
         confirm = cleaned.get('confirm_password')
+        applicant = cleaned.get('applicant')
 
-        # Only enforce password rules when approving a not-yet-approved application
         already_approved = bool(self.instance and self.instance.provider_id)
 
         if status == OnboardingStatus.APPROVED and not already_approved:
-            # Catch duplicate email early so the form shows a clean error
-            if User.objects.filter(email=self.instance.email).exists():
-                raise forms.ValidationError(
-                    f"Cannot approve: '{self.instance.email}' is already registered. "
-                    "This person may have an existing customer or staff account."
-                )
-            if not password:
-                raise forms.ValidationError(
-                    "A password is required when approving.")
-            if len(password) < 8:
-                raise forms.ValidationError(
-                    "Password must be at least 8 characters.")
-            if password != confirm:
-                raise forms.ValidationError("Passwords do not match.")
+            # Walk-in path: no applicant and no existing pre-registration
+            email = self.instance.email if self.instance else cleaned.get(
+                'email')
+            has_preregistration = applicant or User.objects.filter(
+                email=email, is_active=False,
+            ).exists()
+
+            if not has_preregistration:
+                if User.objects.filter(email=email).exists():
+                    raise forms.ValidationError(
+                        f"Cannot approve: '{email}' is already registered.")
+                if not password:
+                    raise forms.ValidationError(
+                        "A password is required for walk-in approvals.")
+                if len(password) < 8:
+                    raise forms.ValidationError(
+                        "Password must be at least 8 characters.")
+                if password != confirm:
+                    raise forms.ValidationError("Passwords do not match.")
 
         return cleaned
 
@@ -203,7 +227,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     form = ProviderOnboardingAdminForm
 
     list_display = (
-        'get_full_name', 'email', 'category', 'region',
+        'get_full_name', 'email', 'applicant_link', 'category', 'region',
         'status_badge', 'age', 'hourly_rate', 'submitted_at',
     )
     list_filter = ('status', 'category', 'region', 'submitted_at')
@@ -218,9 +242,16 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         ('Application Status', {
             'fields': ('status', 'provider_link'),
         }),
-        ('Set Password — required when approving', {
+        ('Pre-Registered Provider', {
+            'fields': ('applicant',),
+            'description': (
+                'Select the provider who pre-registered via the mobile app. '
+                'Their basic info will be prefilled below and can be edited before saving.'
+            ),
+        }),
+        ('Set Password — walk-ins only', {
             'fields': ('set_password', 'confirm_password'),
-            'description': 'Fill only when changing status to Approved.',
+            'description': 'Leave blank if the provider registered via the app.',
         }),
         ('Personal Information', {
             'fields': (
@@ -255,10 +286,18 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related(
-            'region', 'category', 'reviewed_by', 'provider',
+            'region', 'category', 'reviewed_by', 'provider', 'applicant',
         )
 
     # ── Display ──────────────────────────────────────────────
+
+    @admin.display(description='Applicant')
+    def applicant_link(self, obj):
+        if not obj.applicant_id:
+            return mark_safe('<span style="color:#999;font-style:italic">Walk-in</span>')
+        url = reverse('admin:provider_provider_change',
+                      args=[obj.applicant_id])
+        return format_html('<a href="{}">{}</a>', url, obj.applicant.get_full_name())
 
     @admin.display(description='Status')
     def status_badge(self, obj):
@@ -377,7 +416,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         request, "Provider account already exists.", messages.WARNING)
                     super().save_model(request, obj, form, change)
                 else:
-                    password = form.cleaned_data['set_password']
+                    password = form.cleaned_data.get('set_password') or None
                     old.approve(request.user, password=password)
                     return self._show_password_page(request, old, password)
 
@@ -419,10 +458,20 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         back_url = reverse('admin:provider_provideronboarding_changelist')
         provider_url = reverse('admin:provider_provider_change', args=[
                                application.provider_id])
+        # For app-registered providers, password was set by the provider themselves
+        password_section = (
+            f'<tr><td style="padding:10px;color:#666">Password</td>'
+            f'<td style="padding:10px;font-family:monospace;font-size:20px;'
+            f'font-weight:bold;color:#1565C0;letter-spacing:2px">{password}</td></tr>'
+            if password else
+            '<tr><td style="padding:10px;color:#666">Password</td>'
+            '<td style="padding:10px;color:#999;font-style:italic">'
+            'Set by provider during registration</td></tr>'
+        )
         return HttpResponse(f"""
         <html><body style="font-family:sans-serif;padding:40px;max-width:620px;margin:auto">
             <div style="background:#E8F5E9;border:2px solid #4CAF50;border-radius:8px;padding:30px">
-                <h2 style="color:#2E7D32;margin-top:0">✅ Provider Account Created</h2>
+                <h2 style="color:#2E7D32;margin-top:0">✅ Provider Account Activated</h2>
                 <p>The account for <strong>{application.get_full_name()}</strong> is ready.</p>
                 <div style="background:white;border-radius:6px;padding:20px;margin:20px 0">
                     <table style="width:100%;border-collapse:collapse">
@@ -434,16 +483,10 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                             <td style="padding:10px;color:#666">Email</td>
                             <td style="padding:10px;font-weight:bold">{application.email}</td>
                         </tr>
-                        <tr>
-                            <td style="padding:10px;color:#666">Password</td>
-                            <td style="padding:10px;font-family:monospace;font-size:20px;
-                                font-weight:bold;color:#1565C0;letter-spacing:2px">{password}</td>
-                        </tr>
+                        {password_section}
                     </table>
                 </div>
-                <p style="color:#c62828;font-weight:bold">
-                    ⚠️ This password will NOT be shown again. Share it with the provider securely.
-                </p>
+                {"<p style='color:#c62828;font-weight:bold'>⚠️ This password will NOT be shown again. Share it with the provider securely.</p>" if password else ""}
                 <div style="display:flex;gap:10px;margin-top:20px">
                     <a href="{provider_url}"
                        style="background:#4CAF50;color:white;padding:10px 20px;
@@ -486,7 +529,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
     @admin.action(description="✅ Approve — opens detail page to set password")
     def action_approve(self, request, queryset):
-        """Approval requires a password per provider — must be done from the detail page."""
         eligible = [app for app in queryset if app.can_approve()]
 
         if not eligible:
@@ -504,7 +546,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
         self.message_user(
             request,
-            f"{len(eligible)} application(s) ready. Open each individually to set a password and approve.",
+            f"{len(eligible)} application(s) ready. Open each individually to approve.",
             messages.INFO,
         )
 

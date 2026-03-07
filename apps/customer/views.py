@@ -54,4 +54,4 @@ class CustomerProfileView(generics.RetrieveAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        return self.request.user.customer
+        return self.request.user.customer  # type: ignore

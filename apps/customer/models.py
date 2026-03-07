@@ -1,6 +1,7 @@
 from django.db import models
 
 from apps.user.models import User
+from decimal import Decimal
 
 
 class Customer(User):
@@ -10,13 +11,13 @@ class Customer(User):
     wallet_balance = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        default=0.00,
+        default=Decimal('0.00'),
         help_text="Current wallet balance"
     )
     total_cashback = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        default=0.00,
+        default=Decimal('0.00'),
         help_text="Total cashback earned"
     )
 

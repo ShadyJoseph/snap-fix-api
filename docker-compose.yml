@@ -12,9 +12,11 @@ services:
 
   web:
     build: .
+    command: sh -c "until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser && python manage.py runserver 0.0.0.0:8000"
     ports:
       - "8000:8000"
     volumes:
+      - .:/app
       - media_files:/app/media
       - log_files:/app/logs
     env_file: .env
