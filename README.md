@@ -4,12 +4,10 @@ Django REST API backend for the SnapFix application.
 
 ## Prerequisites
 
-- Python 3.11 or higher
-- PostgreSQL 12 or higher
-- pip (Python package manager)
+- Docker & Docker Compose
 - Git
 
-## Initial Setup
+## Setup
 
 ### 1. Clone the Repository
 
@@ -18,237 +16,176 @@ git clone <repository-url>
 cd snap-fix-api
 ```
 
-### 2. Create Virtual Environment
-
-```bash
-python -m venv venv
-```
-
-### 3. Activate Virtual Environment
-
-**Windows (PowerShell):**
-
-```powershell
-.\venv\Scripts\Activate
-```
-
-**Windows (Command Prompt):**
-
-```cmd
-venv\Scripts\activate.bat
-```
-
-**macOS/Linux:**
-
-```bash
-source venv/bin/activate
-```
-
-### 4. Install Dependencies
-
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## Database Setup
-
-### 1. Install PostgreSQL
-
-Download and install PostgreSQL from postgresql.org
-. During installation, make note of:
-
-PostgreSQL superuser: postgres
-
-Superuser password: choose something secure
-
-### 2. Create Database & User
-
-Open psql (PostgreSQL command line) or pgAdmin and run:
-
--- Connect as postgres superuser
-CREATE DATABASE snapfix;
-CREATE USER snapfix_user WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE snapfix TO snapfix_user;
-
--- Switch to snapfix database
-\c snapfix
-
--- Make snapfix_user the owner of the public schema
-ALTER SCHEMA public OWNER TO snapfix_user;
-GRANT ALL PRIVILEGES ON SCHEMA public TO snapfix_user;
-
-This step ensures Django can create tables in the public schema without permission errors.
-
-### 3. Configure Environment Variables
-
-Create a `.env` file in the project root (copy from `.env.example`):
+### 2. Configure Environment Variables
 
 ```bash
 cp .env.example .env
 ```
 
-Update the `.env` file with your database credentials:
+Update `.env` with your values:
 
 ```env
 SECRET_KEY=your-django-secret-key
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
 
-DB_NAME=snapfix
-DB_USER=snapfix
-DB_PASSWORD=your_password
-DB_HOST=localhost
+DB_NAME=snapfix_db
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_HOST=db
 DB_PORT=5432
+
+DJANGO_SUPERUSER_EMAIL=admin@example.com
+DJANGO_SUPERUSER_PASSWORD=your_password
 ```
 
-**Generate a new SECRET_KEY:**
+**Generate a SECRET_KEY:**
 
-```python
+```bash
 python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 ```
 
-## Running the Application
-
-### 1. Run Migrations
+### 3. Start the Application
 
 ```bash
-python manage.py migrate
+make up
 ```
 
-### 2. Create Superuser (Admin)
+This will build the containers, run migrations, create the superuser, and start the dev server.
+
+The API will be available at `http://localhost:8000/`
+
+Admin panel: `http://localhost:8000/admin/`
+
+## Development Commands
 
 ```bash
-python manage.py createsuperuser
+make up              # Build and start containers with hot reload
+make upd             # Build and start containers in background
+make down            # Stop containers
+make down-v          # Stop containers and delete volumes (fresh DB)
+make logs            # Follow container logs
+
+make migrate         # Apply migrations
+make makemigrations  # Create new migrations
+make superuser       # Create superuser manually
+make shell           # Open Django shell
+make bash            # Open container bash
 ```
 
-Follow the prompts to create an admin account.
-
-### 3. Start Development Server
+## Testing
 
 ```bash
-python manage.py runserver
+make test                                              # Run all tests
+make test-v                                            # Run all tests with verbose output
+
+# Run specific app tests
+make test-app app=apps.customer.tests.test_views
+make test-app app=apps.provider.tests.test_views
+make test-app app=apps.core.tests.test_views
+
+# Run specific test class
+make test-class path=apps.customer.tests.test_views.CustomerRegisterTests
+
+# Run specific test method
+make test-class path=apps.customer.tests.test_views.CustomerRegisterTests.test_register_success
 ```
 
-The API will be available at `http://127.0.0.1:8000/`
-
-Admin panel: `http://127.0.0.1:8000/admin/`
-
-## Development Workflow
-
-### Creating a New App
+## Linting & Formatting
 
 ```bash
-python manage.py startapp app_name
-```
-
-Don't forget to add the new app to `INSTALLED_APPS` in `config/settings.py`.
-
-### Making Model Changes
-
-After modifying models:
-
-```bash
-python manage.py makemigrations
-python manage.py migrate
-```
-
-### Running Tests
-
-```bash
-python manage.py test
+ruff check .          # Check for issues
+ruff check --fix .    # Auto-fix issues
+ruff format .         # Format code
 ```
 
 ## Project Structure
 
 ```
 snap-fix-api/
-├── config/              # Project configuration
-│   ├── settings.py      # Django settings
-│   ├── urls.py          # URL routing
-│   └── wsgi.py          # WSGI configuration
-├── venv/                # Virtual environment (not in git)
-├── manage.py            # Django management script
-├── .env                 # Environment variables (not in git)
-├── .env.example         # Example environment file
-├── .gitignore           # Git ignore rules
-├── requirements.txt     # Python dependencies
-└── README.md            # This file
+├── apps/
+│   ├── core/         # Categories & regions
+│   ├── customer/     # Customer auth & profile
+│   ├── provider/     # Provider auth, profile & onboarding
+│   ├── booking/      # Booking management
+│   ├── staff/        # Staff accounts
+│   └── user/         # Base user model
+├── config/
+│   ├── settings.py
+│   ├── urls.py
+│   └── wsgi.py
+├── docker-compose.yml
+├── docker-compose.dev.yml
+├── Dockerfile
+├── manage.py
+├── requirements.txt
+├── makefile
+├── .env.example
+└── README.md
 ```
 
-## Common Commands
-
-```bash
-# Install new package and update requirements
-pip install package-name
-pip freeze > requirements.txt
-
-# Run linting and formatting with Ruff
-ruff check .                    # Check for issues
-ruff check --fix .              # Auto-fix issues
-ruff format .                   # Format code
-
-# Database operations
-python manage.py makemigrations # Create new migrations
-python manage.py migrate        # Apply migrations
-python manage.py dbshell        # Open database shell
-
-# Check for code issues
-python manage.py check
+## API Endpoints
 
 ```
+BASE URL: http://localhost:8000
 
-## Troubleshooting
+CUSTOMERS
+  POST   /api/v1/customers/register/
+  POST   /api/v1/customers/login/
+  POST   /api/v1/customers/logout/
+  GET    /api/v1/customers/me/
 
-### Database Connection Issues
+PROVIDERS
+  POST   /api/v1/providers/register/
+  POST   /api/v1/providers/login/
+  POST   /api/v1/providers/logout/
+  GET    /api/v1/providers/me/
 
-- Verify PostgreSQL is running
-- Check credentials in `.env` file
-- Ensure database exists
-- Verify user has proper permissions
-
-## Contributing
-
-Create a unique branch for your feature:
-
-git checkout -b feature/<your-feature-name>
-
-Replace <your-feature-name> with a descriptive, unique name for your feature, e.g., feature/login-api.
-
-Make your changes in your branch.
-
-Commit your changes using a message that starts with the branch name:
-
-git add .
-git commit -m "feature/<your-feature-name>: Brief description of changes"
-
-Example:
-
-git commit -m "feature/login-api: Add login endpoint and serializer"
-
-Push the branch to the remote repository:
-
-git push origin feature/<your-feature-name>
-
-Create a Pull Request on GitHub from your branch to the main branch.
-
-Commit message structure reminder:
-
-All commit messages should follow this format:
-
-<branch-name>: <short description>
-
-Example: feature/dashboard-ui: Implement responsive dashboard layout
+CORE
+  GET    /api/v1/core/categories/
+  GET    /api/v1/core/regions/
+```
 
 ## Environment Variables Reference
 
-| Variable      | Description                   | Example                    |
-| ------------- | ----------------------------- | -------------------------- |
-| SECRET_KEY    | Django secret key             | Random 50-character string |
-| DEBUG         | Debug mode (True/False)       | True                       |
-| ALLOWED_HOSTS | Comma-separated allowed hosts | localhost,127.0.0.1        |
-| DB_NAME       | Database name                 | snapfix_db                 |
-| DB_USER       | Database username             | snapfix_user               |
-| DB_PASSWORD   | Database password             | your_password              |
-| DB_HOST       | Database host                 | localhost                  |
-| DB_PORT       | Database port                 | 5432                       |
+| Variable                  | Description                   | Example                    |
+| ------------------------- | ----------------------------- | -------------------------- |
+| SECRET_KEY                | Django secret key             | Random 50-character string |
+| DEBUG                     | Debug mode                    | True                       |
+| ALLOWED_HOSTS             | Comma-separated allowed hosts | localhost,127.0.0.1        |
+| DB_NAME                   | Database name                 | snapfix_db                 |
+| DB_USER                   | Database username             | postgres                   |
+| DB_PASSWORD               | Database password             | postgres                   |
+| DB_HOST                   | Database host                 | db                         |
+| DB_PORT                   | Database port                 | 5432                       |
+| DJANGO_SUPERUSER_EMAIL    | Admin email                   | admin@example.com          |
+| DJANGO_SUPERUSER_PASSWORD | Admin password                | your_password              |
+
+## Contributing
+
+Create a branch for your feature:
+
+```bash
+git checkout -b feature/<your-feature-name>
+```
+
+Commit your changes:
+
+```bash
+git add .
+git commit -m "feature/<your-feature-name>: Brief description"
+```
+
+Push and open a Pull Request:
+
+```bash
+git push origin feature/<your-feature-name>
+```
+
+All commit messages must follow this format:
+
+```
+<branch-name>: <short description>
+
+Example: feature/login-api: Add login endpoint and serializer
+```

@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.core.validators import (
@@ -13,7 +14,7 @@ from django.utils import timezone
 from apps.user.models import User
 
 from .choices import OnboardingStatus, ProviderVerificationStatus
-from .managers import ProviderOnboardingManager
+from .managers import ProviderManager, ProviderOnboardingManager
 
 phone_validator = RegexValidator(
     regex=r'^(\+?20)?01[0125]\d{8}$',
@@ -24,25 +25,20 @@ MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 
 
 class Provider(User):
-    """Service provider — created only via onboarding approval."""
+    """
+    Service provider.
+    Created via mobile registration (is_active=False),
+    activated after office verification and admin approval.
+    Documents live on ProviderOnboarding — no duplication here.
+    """
+
+    objects = ProviderManager()
 
     verification_status = models.CharField(
         max_length=max(len(c[0]) for c in ProviderVerificationStatus.choices),
         choices=ProviderVerificationStatus.choices,
         default=ProviderVerificationStatus.PENDING,
         db_index=True,
-    )
-    id_document = models.FileField(
-        upload_to='provider_documents/',
-        blank=True, null=True,
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
-        help_text="ID document (Max 5MB)",
-    )
-    certification = models.FileField(
-        upload_to='provider_certifications/',
-        blank=True, null=True,
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
-        help_text="Professional certifications (Max 5MB)",
     )
 
     # Service
@@ -74,12 +70,12 @@ class Provider(User):
     # Financial
     total_earnings = models.DecimalField(
         max_digits=10, decimal_places=2,
-        default=0.00,
+        default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
     )
     available_balance = models.DecimalField(
         max_digits=10, decimal_places=2,
-        default=0.00,
+        default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
     )
 
@@ -98,7 +94,7 @@ class Provider(User):
         default=0, validators=[MinValueValidator(0)])
     average_rating = models.DecimalField(
         max_digits=3, decimal_places=2,
-        default=0.00,
+        default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
     )
     total_reviews = models.IntegerField(
@@ -116,14 +112,6 @@ class Provider(User):
 
     def __str__(self):
         return f"Provider: {self.get_full_name()}"
-
-    def clean(self):
-        super().clean()
-        for field in ('id_document', 'certification'):
-            f = getattr(self, field)
-            if f and hasattr(f, 'size') and f.size > MAX_FILE_SIZE:
-                raise ValidationError(
-                    {field: 'File size must not exceed 5MB.'})
 
     # ── Financial helpers ────────────────────────────────────
 
@@ -165,7 +153,8 @@ class Provider(User):
 
 class ProviderOnboarding(models.Model):
     """
-    Onboarding application with FSM workflow.
+    Onboarding application — filled by staff at the office.
+    Single source of truth for all provider documents.
 
     State flow:
         pending → under_review → approved / rejected / changes_required
@@ -173,6 +162,14 @@ class ProviderOnboarding(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Pre-registered provider (linked when provider registers via mobile app)
+    applicant = models.OneToOneField(
+        Provider,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='pending_application',
+    )
 
     # Personal
     first_name = models.CharField(max_length=100)
@@ -205,7 +202,7 @@ class ProviderOnboarding(models.Model):
     )
     bio = models.TextField(blank=True)
 
-    # Documents
+    # Documents — single source of truth, never copied to Provider
     nid_front = models.ImageField(
         upload_to='onboarding/nid/front/',
         validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
@@ -248,7 +245,7 @@ class ProviderOnboarding(models.Model):
     rejection_reason = models.TextField(blank=True)
     change_requests = models.TextField(blank=True)
 
-    # Result
+    # Result — set after approval
     provider = models.OneToOneField(
         Provider,
         on_delete=models.SET_NULL,
@@ -277,7 +274,7 @@ class ProviderOnboarding(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.get_full_name()} — {self.get_status_display()}"
+        return f"{self.get_full_name()} — {self.status}"
 
     def get_full_name(self):
         return f"{self.first_name} {self.last_name}"
@@ -295,10 +292,16 @@ class ProviderOnboarding(models.Model):
             raise ValidationError(
                 {'date_of_birth': 'Applicant must be 18 or older.'})
 
-        # Email uniqueness against User table — only on first creation
+        # Allow if the email belongs to a pending, inactive Provider (mobile pre-registration)
         if not self.pk and User.objects.filter(email=self.email).exists():
-            raise ValidationError(
-                {'email': 'This email is already registered.'})
+            is_pending_provider = Provider.objects.filter(
+                email=self.email,
+                is_active=False,
+                verification_status=ProviderVerificationStatus.PENDING,
+            ).exists()
+            if not is_pending_provider:
+                raise ValidationError(
+                    {'email': 'This email is already registered.'})
 
         # File size validation
         file_fields = [
@@ -330,51 +333,74 @@ class ProviderOnboarding(models.Model):
     def move_to_review(self, admin_user):
         if not self.can_review():
             raise ValueError(
-                f"Cannot move to Under Review from '{self.get_status_display()}'.")
+                f"Cannot move to Under Review from '{self.status}'.")
         self.status = OnboardingStatus.UNDER_REVIEW
         self.reviewed_by = admin_user
         self.reviewed_at = timezone.now()
         self.save()
 
     @transaction.atomic
-    def approve(self, admin_user, password):
-        """Approve and create the Provider account. Password must be provided explicitly."""
+    def approve(self, admin_user, password=None):
+        """
+        Approve the onboarding application.
+
+        Two paths:
+          1. Provider pre-registered via mobile (applicant is set) → activate + fill office data.
+          2. Walk-in (no applicant) → create Provider from scratch (password required).
+
+        Documents stay on ProviderOnboarding as the single source of truth.
+        Access via: provider.onboarding_application.nid_front etc.
+        """
         if not self.can_approve():
-            raise ValueError(
-                f"Cannot approve from '{self.get_status_display()}'.")
+            raise ValueError(f"Cannot approve from '{self.status}'.")
 
-        # Guard against duplicate email at approval time
-        if User.objects.filter(email=self.email).exists():
-            raise ValueError(
-                f"Email '{self.email}' is already registered. "
-                "This person may already have a customer or staff account."
-            )
-
-        provider = Provider.objects.create_user(
-            email=self.email,
-            password=password,
-            first_name=self.first_name,
-            last_name=self.last_name,
-            phone=self.phone,
-            address=self.address,
-            region=self.region,
-            hourly_rate=self.hourly_rate,
-            years_of_experience=self.years_of_experience,
-            bio=self.bio,
-            verification_status=ProviderVerificationStatus.VERIFIED,
-            is_verified=True,
-            is_active=True,
+        # Use linked applicant if present, otherwise fall back to email lookup
+        existing_user = (
+            self.applicant if self.applicant_id
+            else User.objects.filter(email=self.email).first()
         )
 
-        if self.nid_front:
-            provider.id_document = self.nid_front
-        if self.professional_certificate:
-            provider.certification = self.professional_certificate
-        if self.profile_photo:
-            provider.profile_picture = self.profile_photo
+        if existing_user is not None:
+            if not hasattr(existing_user, 'provider'):
+                raise ValueError(
+                    f"'{self.email}' exists but is not a provider account.")
 
-        provider.save()
-        provider.categories.add(self.category)
+            provider = existing_user.provider  # type: ignore
+            provider.is_active = True
+            provider.is_verified = True
+            provider.verification_status = ProviderVerificationStatus.VERIFIED
+            provider.first_name = self.first_name
+            provider.last_name = self.last_name
+            provider.phone = self.phone
+            provider.address = self.address
+            provider.region = self.region
+            provider.hourly_rate = self.hourly_rate
+            provider.years_of_experience = self.years_of_experience
+            provider.bio = self.bio
+            provider.save()
+            provider.categories.add(self.category)
+
+        else:
+            if not password:
+                raise ValueError(
+                    "Password is required when no prior registration exists.")
+
+            provider = Provider.objects.create_user(  # type: ignore
+                email=self.email,
+                password=password,
+                first_name=self.first_name,
+                last_name=self.last_name,
+                phone=self.phone,
+                address=self.address,
+                region=self.region,
+                hourly_rate=self.hourly_rate,
+                years_of_experience=self.years_of_experience,
+                bio=self.bio,
+                verification_status=ProviderVerificationStatus.VERIFIED,
+                is_verified=True,
+                is_active=True,
+            )
+            provider.categories.add(self.category)
 
         self.provider = provider
         self.status = OnboardingStatus.APPROVED
@@ -386,8 +412,7 @@ class ProviderOnboarding(models.Model):
 
     def reject(self, admin_user, reason):
         if not self.can_reject():
-            raise ValueError(
-                f"Cannot reject from '{self.get_status_display()}'.")
+            raise ValueError(f"Cannot reject from '{self.status}'.")
         self.status = OnboardingStatus.REJECTED
         self.reviewed_by = admin_user
         self.rejection_reason = reason
@@ -396,8 +421,7 @@ class ProviderOnboarding(models.Model):
 
     def request_changes(self, admin_user, change_requests):
         if not self.can_request_changes():
-            raise ValueError(
-                f"Cannot request changes from '{self.get_status_display()}'.")
+            raise ValueError(f"Cannot request changes from '{self.status}'.")
         self.status = OnboardingStatus.CHANGES_REQUIRED
         self.reviewed_by = admin_user
         self.change_requests = change_requests

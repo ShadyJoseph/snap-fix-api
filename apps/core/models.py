@@ -1,26 +1,24 @@
 import uuid
 
-from django.db import models
+from django.contrib.gis.db import models
+from django.contrib.gis.geos import Point
 
 
 class Category(models.Model):
-    """Service categories that providers can operate in"""
+    """Service categories that providers can operate in."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     icon = models.CharField(
-        max_length=50,
+        max_length=10,
         blank=True,
-        help_text="Icon class name"
+        help_text="Emoji icon e.g. 🔧"
     )
     is_active = models.BooleanField(default=True)
-
-    # Ordering
     order = models.IntegerField(default=0, help_text="Display order")
 
-    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -31,11 +29,11 @@ class Category(models.Model):
         ordering = ['order', 'name']
 
     def __str__(self):
-        return self.name
+        return f"{self.icon} {self.name}".strip()
 
 
 class Region(models.Model):
-    """Geographic regions where providers operate"""
+    """Geographic regions where providers operate."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
@@ -45,26 +43,19 @@ class Region(models.Model):
         unique=True,
         help_text="Region code (e.g., CAI, ALX)"
     )
-
-    # Geographic data
     country = models.CharField(max_length=100, default="Egypt")
-    latitude = models.DecimalField(
-        max_digits=9,
-        decimal_places=6,
+
+    # PostGIS Point — replaces separate lat/lng fields
+    location = models.PointField(
+        geography=True,
         null=True,
-        blank=True
-    )
-    longitude = models.DecimalField(
-        max_digits=9,
-        decimal_places=6,
-        null=True,
-        blank=True
+        blank=True,
+        help_text="Region center point (longitude, latitude)",
+        srid=4326,
     )
 
-    # Status
     is_active = models.BooleanField(default=True)
 
-    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -73,6 +64,22 @@ class Region(models.Model):
         verbose_name = 'Region'
         verbose_name_plural = 'Regions'
         ordering = ['country', 'name']
+        indexes = [
+            models.Index(fields=['is_active']),
+        ]
 
     def __str__(self):
         return f"{self.name}, {self.country}"
+
+    @property
+    def latitude(self):
+        return self.location.y if self.location else None
+
+    @property
+    def longitude(self):
+        return self.location.x if self.location else None
+
+    @classmethod
+    def set_location(cls, lat, lng):
+        """Helper to create a Point from lat/lng."""
+        return Point(x=lng, y=lat, srid=4326)

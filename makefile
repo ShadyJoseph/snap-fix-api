@@ -29,3 +29,16 @@ bash:
 
 makemigrations:
 	docker compose exec web python manage.py makemigrations
+
+# Testing
+test:
+	docker compose exec web python manage.py test
+
+test-app:
+	docker compose exec web python manage.py test $(app)
+
+test-class:
+	docker compose exec web python manage.py test $(path)
+
+test-v:
+	docker compose exec web python manage.py test --verbosity=2

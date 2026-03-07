@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 from django.db import models
+
+from apps.user.managers import UserManager
 
 from .choices import OnboardingStatus
 
 
+class ProviderManager(UserManager):
+    pass
+
+
 class ProviderOnboardingManager(models.Manager):
-    """Custom manager for ProviderOnboarding"""
 
     def pending(self):
         return self.filter(status=OnboardingStatus.PENDING)

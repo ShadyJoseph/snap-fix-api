@@ -1,23 +1,18 @@
-from django.contrib import admin
+from django.contrib.gis import admin as gis_admin
 from django.utils.html import format_html
 
 from .models import Category, Region
 
 
-@admin.register(Category)
-class CategoryAdmin(admin.ModelAdmin):
-    list_display = (
-        'name',
-        'slug',
-        'icon_display',
-        'is_active',
-        'order',
-        'created_at'
-    )
-    list_filter = ('is_active', 'created_at')
+@gis_admin.register(Category)
+class CategoryAdmin(gis_admin.ModelAdmin):
+    list_display = ('icon_display', 'name', 'slug',
+                    'is_active', 'order', 'created_at')
+    list_filter = ('is_active',)
     search_fields = ('name', 'slug', 'description')
     prepopulated_fields = {'slug': ('name',)}
     ordering = ('order', 'name')
+    readonly_fields = ('created_at', 'updated_at')
 
     fieldsets = (
         ('Basic Information', {
@@ -32,33 +27,30 @@ class CategoryAdmin(admin.ModelAdmin):
         }),
     )
 
-    readonly_fields = ('created_at', 'updated_at')
-
+    @gis_admin.display(description='Icon')
     def icon_display(self, obj):
-        """Display icon if available"""
         if obj.icon:
             return format_html(
-                '<span style="font-size: 16px;">{}</span>',
-                obj.icon
-            )
-        return '-'
-    icon_display.short_description = 'Icon'
+                '<span style="font-size:20px">{}</span>', obj.icon)
+        return '—'
 
 
-@admin.register(Region)
-class RegionAdmin(admin.ModelAdmin):
-    list_display = ('name', 'code', 'country', 'is_active', 'created_at')
-    list_filter = ('is_active', 'country', 'created_at')
+@gis_admin.register(Region)
+class RegionAdmin(gis_admin.GISModelAdmin):
+    list_display = ('name', 'code', 'country', 'latitude',
+                    'longitude', 'is_active', 'created_at')
+    list_filter = ('is_active', 'country')
     search_fields = ('name', 'code', 'country')
     prepopulated_fields = {'slug': ('name',)}
     ordering = ('country', 'name')
+    readonly_fields = ('created_at', 'updated_at')
 
     fieldsets = (
         ('Basic Information', {
             'fields': ('name', 'slug', 'code', 'country')
         }),
         ('Geographic Data', {
-            'fields': ('latitude', 'longitude')
+            'fields': ('location',)
         }),
         ('Settings', {
             'fields': ('is_active',)
@@ -68,5 +60,3 @@ class RegionAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-
-    readonly_fields = ('created_at', 'updated_at')
