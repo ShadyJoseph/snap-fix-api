@@ -40,10 +40,10 @@ class ProviderAdmin(admin.ModelAdmin):
         'date_joined', 'last_login', 'updated_at',
         'total_earnings', 'total_jobs', 'completed_jobs',
         'average_rating', 'total_reviews', 'completion_rate_display',
+        'verification_status', 'is_verified',  # app-controlled via onboarding
     )
     filter_horizontal = ('categories',)
-    actions = ['verify_providers', 'reject_providers',
-               'make_available', 'make_unavailable']
+    actions = ['make_available', 'make_unavailable']
 
     fieldsets = (
         ('User Information', {
@@ -72,6 +72,7 @@ class ProviderAdmin(admin.ModelAdmin):
         }),
         ('Status', {
             'fields': ('is_active', 'is_verified', 'verification_status'),
+            'description': 'Verification status is managed automatically via onboarding.',
         }),
         ('Timestamps', {
             'fields': ('date_joined', 'last_login', 'updated_at'),
@@ -101,20 +102,6 @@ class ProviderAdmin(admin.ModelAdmin):
     @admin.display(description='Completion Rate')
     def completion_rate_display(self, obj):
         return f"{obj.get_completion_rate()}%"
-
-    @admin.action(description="Verify selected providers")
-    def verify_providers(self, request, queryset):
-        updated = queryset.update(
-            verification_status=ProviderVerificationStatus.VERIFIED, is_verified=True)
-        self.message_user(
-            request, f"{updated} provider(s) verified.", messages.SUCCESS)
-
-    @admin.action(description="Reject selected providers")
-    def reject_providers(self, request, queryset):
-        updated = queryset.update(
-            verification_status=ProviderVerificationStatus.REJECTED, is_verified=False)
-        self.message_user(
-            request, f"{updated} provider(s) rejected.", messages.WARNING)
 
     @admin.action(description="Mark as available")
     def make_available(self, request, queryset):
@@ -159,9 +146,12 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Limit reviewer to active staff only
+        # FK points to Staff — restrict to active staff and disable related buttons
         self.fields['reviewed_by'].queryset = Staff.objects.filter(
             is_active=True)
+        self.fields['reviewed_by'].widget.can_add_related = False
+        self.fields['reviewed_by'].widget.can_change_related = False
+        self.fields['reviewed_by'].widget.can_delete_related = False
 
         # Limit applicant dropdown to pending, inactive providers only
         self.fields['applicant'].queryset = Provider.objects.filter(
@@ -169,6 +159,8 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
             verification_status=ProviderVerificationStatus.PENDING,
         )
         self.fields['applicant'].required = False
+        self.fields['applicant'].widget.can_add_related = False
+        self.fields['applicant'].widget.can_change_related = False
 
         # Prefill personal fields from the linked applicant
         instance = kwargs.get('instance')
@@ -194,7 +186,6 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         already_approved = bool(self.instance and self.instance.provider_id)
 
         if status == OnboardingStatus.APPROVED and not already_approved:
-            # Walk-in path: no applicant and no existing pre-registration
             email = self.instance.email if self.instance else cleaned.get(
                 'email')
             has_preregistration = applicant or User.objects.filter(
@@ -458,7 +449,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         back_url = reverse('admin:provider_provideronboarding_changelist')
         provider_url = reverse('admin:provider_provider_change', args=[
                                application.provider_id])
-        # For app-registered providers, password was set by the provider themselves
         password_section = (
             f'<tr><td style="padding:10px;color:#666">Password</td>'
             f'<td style="padding:10px;font-family:monospace;font-size:20px;'

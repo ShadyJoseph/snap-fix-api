@@ -11,6 +11,7 @@ from django.core.validators import (
 from django.db import models, transaction
 from django.utils import timezone
 
+from apps.staff.models import Staff
 from apps.user.models import User
 
 from .choices import OnboardingStatus, ProviderVerificationStatus
@@ -236,7 +237,7 @@ class ProviderOnboarding(models.Model):
 
     # Review
     reviewed_by = models.ForeignKey(
-        User,
+        Staff,
         on_delete=models.SET_NULL,
         null=True, blank=True,
         related_name='reviewed_onboardings',
