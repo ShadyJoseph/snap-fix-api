@@ -12,7 +12,6 @@ class ProviderManager(UserManager):
 
 
 class ProviderOnboardingManager(models.Manager):
-
     def pending(self):
         return self.filter(status=OnboardingStatus.PENDING)
 

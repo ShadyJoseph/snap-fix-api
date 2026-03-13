@@ -42,3 +42,22 @@ test-class:
 
 test-v:
 	docker compose exec web python manage.py test --verbosity=2
+
+# Code Quality
+lint:
+	docker compose exec web ruff check .
+
+format:
+	docker compose exec web ruff format . --check
+
+security:
+	docker compose exec web bandit -r .
+
+fix:
+	docker compose exec web ruff check . --fix
+	docker compose exec web ruff format .
+
+clean:
+	@echo "Running all fixes and checks..."
+	docker compose exec web ruff check . --fix
+	docker compose exec web ruff format .

@@ -11,11 +11,7 @@ class Category(models.Model):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True)
     description = models.TextField(blank=True)
-    icon = models.CharField(
-        max_length=10,
-        blank=True,
-        help_text="Emoji icon e.g. 🔧"
-    )
+    icon = models.CharField(max_length=10, blank=True, help_text="Emoji icon e.g. 🔧")
     is_active = models.BooleanField(default=True)
     order = models.IntegerField(default=0, help_text="Display order")
 
@@ -23,10 +19,10 @@ class Category(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = 'categories'
-        verbose_name = 'Category'
-        verbose_name_plural = 'Categories'
-        ordering = ['order', 'name']
+        db_table = "categories"
+        verbose_name = "Category"
+        verbose_name_plural = "Categories"
+        ordering = ["order", "name"]
 
     def __str__(self):
         return f"{self.icon} {self.name}".strip()
@@ -39,9 +35,7 @@ class Region(models.Model):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True)
     code = models.CharField(
-        max_length=20,
-        unique=True,
-        help_text="Region code (e.g., CAI, ALX)"
+        max_length=20, unique=True, help_text="Region code (e.g., CAI, ALX)"
     )
     country = models.CharField(max_length=100, default="Egypt")
 
@@ -60,12 +54,12 @@ class Region(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = 'regions'
-        verbose_name = 'Region'
-        verbose_name_plural = 'Regions'
-        ordering = ['country', 'name']
+        db_table = "regions"
+        verbose_name = "Region"
+        verbose_name_plural = "Regions"
+        ordering = ["country", "name"]
         indexes = [
-            models.Index(fields=['is_active']),
+            models.Index(fields=["is_active"]),
         ]
 
     def __str__(self):

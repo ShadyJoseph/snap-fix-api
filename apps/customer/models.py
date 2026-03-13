@@ -12,33 +12,30 @@ class Customer(User):
     wallet_balance = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        default=Decimal('0.00'),
-        help_text="Current wallet balance"
+        default=Decimal("0.00"),
+        help_text="Current wallet balance",
     )
     total_cashback = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        default=Decimal('0.00'),
-        help_text="Total cashback earned"
+        default=Decimal("0.00"),
+        help_text="Total cashback earned",
     )
 
     # Favorites (forward reference to Provider)
     favorite_providers = models.ManyToManyField(
-        'provider.Provider',
-        blank=True,
-        related_name='favorited_by'
+        "provider.Provider", blank=True, related_name="favorited_by"
     )
 
     # Stats
     total_bookings = models.IntegerField(
-        default=0,
-        help_text="Total number of bookings made"
+        default=0, help_text="Total number of bookings made"
     )
 
     class Meta:
-        db_table = 'customers'
-        verbose_name = 'Customer'
-        verbose_name_plural = 'Customers'
+        db_table = "customers"
+        verbose_name = "Customer"
+        verbose_name_plural = "Customers"
 
     def __str__(self):
         return f"Customer: {self.get_full_name()}"
@@ -47,13 +44,13 @@ class Customer(User):
         """Add money to wallet"""
         if amount > 0:
             self.wallet_balance += amount
-            self.save(update_fields=['wallet_balance'])
+            self.save(update_fields=["wallet_balance"])
 
     def deduct_from_wallet(self, amount):
         """Deduct money from wallet if sufficient balance"""
         if amount > 0 and self.wallet_balance >= amount:
             self.wallet_balance -= amount
-            self.save(update_fields=['wallet_balance'])
+            self.save(update_fields=["wallet_balance"])
             return True
         return False
 
@@ -62,9 +59,9 @@ class Customer(User):
         if amount > 0:
             self.wallet_balance += amount
             self.total_cashback += amount
-            self.save(update_fields=['wallet_balance', 'total_cashback'])
+            self.save(update_fields=["wallet_balance", "total_cashback"])
 
     def increment_bookings(self):
         """Increment total bookings counter"""
         self.total_bookings += 1
-        self.save(update_fields=['total_bookings'])
+        self.save(update_fields=["total_bookings"])

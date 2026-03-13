@@ -2,25 +2,31 @@
 # https://docs.astral.sh/ruff/
 
 line-length = 88
-target-version = "py311"
+target-version = "py312"  
 
 [lint]
 select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports/vars)
+    "I",    # isort (import sorting)
+    "B",    # flake8-bugbear (common logic bugs)
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade (modernizes syntax for 3.12)
+    "DJ",   # flake8-django (Django-specific best practices)
+    "T20",  # flake8-print (prevents forgotten print() statements)
+    "N",    # pep8-naming (standard naming conventions)
+    "S",    # flake8-bandit (security checks—Ruff's version of Bandit!)
 ]
 ignore = [
-    "E501",  # line too long (handled by formatter)
+    "E501", # line too long (handled by formatter)
+    "S101", # allow 'assert' (used heavily in Django tests)
 ]
 
 [lint.per-file-ignores]
-"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
-"**/migrations/*.py" = ["E501"]  # Allow long lines in migrations
+"__init__.py" = ["F401"]
+"**/migrations/*.py" = ["E501"]
+"**/tests/**/*.py" = ["S101", "S105"] # Ignore security checks for hardcoded passwords in tests
 
 [format]
 quote-style = "double"

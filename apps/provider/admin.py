@@ -6,8 +6,7 @@ from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html
-from django.utils.safestring import mark_safe
+from django.utils.html import format_html, mark_safe
 
 from apps.staff.models import Staff
 from apps.user.models import User
@@ -24,82 +23,140 @@ TERMINAL_STATUSES = (OnboardingStatus.APPROVED, OnboardingStatus.REJECTED)
 # Provider Admin
 # ─────────────────────────────────────────────────────────────
 
+
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
-
     list_display = (
-        'email', 'first_name', 'last_name', 'region',
-        'verification_badge', 'average_rating',
-        'completion_rate_display', 'is_available', 'date_joined',
+        "email",
+        "first_name",
+        "last_name",
+        "region",
+        "verification_badge",
+        "average_rating",
+        "completion_rate_display",
+        "is_available",
+        "date_joined",
     )
-    list_filter = ('verification_status',
-                   'is_available', 'is_active', 'region')
-    search_fields = ('email', 'first_name', 'last_name',
-                     'business_name', 'phone')
+    list_filter = ("verification_status", "is_available", "is_active", "region")
+    search_fields = ("email", "first_name", "last_name", "business_name", "phone")
     readonly_fields = (
-        'date_joined', 'last_login', 'updated_at',
-        'total_earnings', 'total_jobs', 'completed_jobs',
-        'average_rating', 'total_reviews', 'completion_rate_display',
-        'verification_status', 'is_verified',  # app-controlled via onboarding
+        "date_joined",
+        "last_login",
+        "updated_at",
+        "total_earnings",
+        "total_jobs",
+        "completed_jobs",
+        "average_rating",
+        "total_reviews",
+        "completion_rate_display",
+        "verification_status",
+        "is_verified",
     )
-    filter_horizontal = ('categories',)
-    actions = ['make_available', 'make_unavailable']
+    filter_horizontal = ("categories",)
+    actions = ["make_available", "make_unavailable"]
 
     fieldsets = (
-        ('User Information', {
-            'fields': ('email', 'first_name', 'last_name', 'phone', 'profile_picture'),
-        }),
-        ('Service', {
-            'fields': ('categories', 'region', 'hourly_rate', 'years_of_experience', 'service_radius'),
-        }),
-        ('Business', {
-            'fields': ('business_name', 'bio'),
-        }),
-        ('Financial', {
-            'fields': ('total_earnings', 'available_balance'),
-        }),
-        ('Availability', {
-            'fields': ('is_available',),
-        }),
-        ('Location', {
-            'fields': ('address', 'latitude', 'longitude'),
-        }),
-        ('Statistics', {
-            'fields': (
-                'total_jobs', 'completed_jobs',
-                'completion_rate_display', 'average_rating', 'total_reviews',
-            ),
-        }),
-        ('Status', {
-            'fields': ('is_active', 'is_verified', 'verification_status'),
-            'description': 'Verification status is managed automatically via onboarding.',
-        }),
-        ('Timestamps', {
-            'fields': ('date_joined', 'last_login', 'updated_at'),
-            'classes': ('collapse',),
-        }),
+        (
+            "User Information",
+            {
+                "fields": (
+                    "email",
+                    "first_name",
+                    "last_name",
+                    "phone",
+                    "profile_picture",
+                ),
+            },
+        ),
+        (
+            "Service",
+            {
+                "fields": (
+                    "categories",
+                    "region",
+                    "hourly_rate",
+                    "years_of_experience",
+                    "service_radius",
+                ),
+            },
+        ),
+        (
+            "Business",
+            {
+                "fields": ("business_name", "bio"),
+            },
+        ),
+        (
+            "Financial",
+            {
+                "fields": ("total_earnings", "available_balance"),
+            },
+        ),
+        (
+            "Availability",
+            {
+                "fields": ("is_available",),
+            },
+        ),
+        (
+            "Location",
+            {
+                "fields": ("address", "latitude", "longitude"),
+            },
+        ),
+        (
+            "Statistics",
+            {
+                "fields": (
+                    "total_jobs",
+                    "completed_jobs",
+                    "completion_rate_display",
+                    "average_rating",
+                    "total_reviews",
+                ),
+            },
+        ),
+        (
+            "Status",
+            {
+                "fields": ("is_active", "is_verified", "verification_status"),
+                "description": "Verification status is managed automatically via onboarding.",
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("date_joined", "last_login", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
     )
 
     def has_add_permission(self, request):
-        return False  # only created via onboarding approval
+        return False
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('region').prefetch_related('categories')
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("region")
+            .prefetch_related("categories")
+        )
 
-    @admin.display(description='Verification')
+    @admin.display(description="Verification")
     def verification_badge(self, obj):
         colors = {
-            ProviderVerificationStatus.PENDING:  'orange',
-            ProviderVerificationStatus.VERIFIED: 'green',
-            ProviderVerificationStatus.REJECTED: 'red',
+            ProviderVerificationStatus.PENDING: "orange",
+            ProviderVerificationStatus.VERIFIED: "green",
+            ProviderVerificationStatus.REJECTED: "red",
         }
         return format_html(
             '<span style="color:{};font-weight:bold">{}</span>',
-            colors.get(obj.verification_status, 'gray'),
+            colors.get(obj.verification_status, "gray"),
             obj.get_verification_status_display(),
         )
 
-    @admin.display(description='Completion Rate')
+    @admin.display(description="Completion Rate")
     def completion_rate_display(self, obj):
         return f"{obj.get_completion_rate()}%"
 
@@ -107,18 +164,21 @@ class ProviderAdmin(admin.ModelAdmin):
     def make_available(self, request, queryset):
         updated = queryset.update(is_available=True)
         self.message_user(
-            request, f"{updated} provider(s) marked as available.", messages.SUCCESS)
+            request, f"{updated} provider(s) marked as available.", messages.SUCCESS
+        )
 
     @admin.action(description="Mark as unavailable")
     def make_unavailable(self, request, queryset):
         updated = queryset.update(is_available=False)
         self.message_user(
-            request, f"{updated} provider(s) marked as unavailable.", messages.WARNING)
+            request, f"{updated} provider(s) marked as unavailable.", messages.WARNING
+        )
 
 
 # ─────────────────────────────────────────────────────────────
 # Onboarding Form
 # ─────────────────────────────────────────────────────────────
+
 
 class ProviderOnboardingAdminForm(forms.ModelForm):
     set_password = forms.CharField(
@@ -135,42 +195,70 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 
     class Meta:
         model = ProviderOnboarding
-        fields = '__all__'
+        fields = [
+            # Linking
+            "applicant",
+            "status",
+            # Personal
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "date_of_birth",
+            "profile_photo",
+            # Location & Service
+            "address",
+            "region",
+            "category",
+            # Professional
+            "hourly_rate",
+            "years_of_experience",
+            "bio",
+            # Documents
+            "nid_front",
+            "nid_back",
+            "police_clearance_certificate",
+            "professional_certificate",
+            # Review
+            "reviewed_by",
+            "admin_notes",
+            "rejection_reason",
+            "change_requests",
+        ]
         widgets = {
-            'admin_notes':      forms.Textarea(attrs={'rows': 3}),
-            'rejection_reason': forms.Textarea(attrs={'rows': 3}),
-            'change_requests':  forms.Textarea(attrs={'rows': 3}),
-            'bio':              forms.Textarea(attrs={'rows': 4}),
+            "admin_notes": forms.Textarea(attrs={"rows": 3}),
+            "rejection_reason": forms.Textarea(attrs={"rows": 3}),
+            "change_requests": forms.Textarea(attrs={"rows": 3}),
+            "bio": forms.Textarea(attrs={"rows": 4}),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # FK points to Staff — restrict to active staff and disable related buttons
-        self.fields['reviewed_by'].queryset = Staff.objects.filter(
-            is_active=True)
-        self.fields['reviewed_by'].widget.can_add_related = False
-        self.fields['reviewed_by'].widget.can_change_related = False
-        self.fields['reviewed_by'].widget.can_delete_related = False
+        # FK points to Staff — restrict + disable related buttons
+        self.fields["reviewed_by"].queryset = Staff.objects.filter(is_active=True)
+        self.fields["reviewed_by"].widget.can_add_related = False
+        self.fields["reviewed_by"].widget.can_change_related = False
+        self.fields["reviewed_by"].widget.can_delete_related = False
 
-        # Limit applicant dropdown to pending, inactive providers only
-        self.fields['applicant'].queryset = Provider.objects.filter(
+        # Limit applicant to pending, inactive providers only
+        self.fields["applicant"].queryset = Provider.objects.filter(
             is_active=False,
             verification_status=ProviderVerificationStatus.PENDING,
         )
-        self.fields['applicant'].required = False
-        self.fields['applicant'].widget.can_add_related = False
-        self.fields['applicant'].widget.can_change_related = False
+        self.fields["applicant"].required = False
+        self.fields["applicant"].widget.can_add_related = False
+        self.fields["applicant"].widget.can_change_related = False
 
-        # Prefill personal fields from the linked applicant
-        instance = kwargs.get('instance')
+        # Prefill personal fields from linked applicant
+        instance = kwargs.get("instance")
         if instance and instance.applicant_id:
             applicant = instance.applicant
             prefill = {
-                'first_name': applicant.first_name,
-                'last_name':  applicant.last_name,
-                'email':      applicant.email,
-                'phone':      applicant.phone or '',
+                "first_name": applicant.first_name,
+                "last_name": applicant.last_name,
+                "email": applicant.email,
+                "phone": applicant.phone or "",
             }
             for field, value in prefill.items():
                 if not self.initial.get(field):
@@ -178,30 +266,36 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        status = cleaned.get('status')
-        password = cleaned.get('set_password')
-        confirm = cleaned.get('confirm_password')
-        applicant = cleaned.get('applicant')
+        status = cleaned.get("status")
+        password = cleaned.get("set_password")
+        confirm = cleaned.get("confirm_password")
+        applicant = cleaned.get("applicant")
 
         already_approved = bool(self.instance and self.instance.provider_id)
 
         if status == OnboardingStatus.APPROVED and not already_approved:
-            email = self.instance.email if self.instance else cleaned.get(
-                'email')
-            has_preregistration = applicant or User.objects.filter(
-                email=email, is_active=False,
-            ).exists()
+            email = self.instance.email if self.instance else cleaned.get("email")
+            has_preregistration = (
+                applicant
+                or User.objects.filter(
+                    email=email,
+                    is_active=False,
+                ).exists()
+            )
 
             if not has_preregistration:
                 if User.objects.filter(email=email).exists():
                     raise forms.ValidationError(
-                        f"Cannot approve: '{email}' is already registered.")
+                        f"Cannot approve: '{email}' is already registered."
+                    )
                 if not password:
                     raise forms.ValidationError(
-                        "A password is required for walk-in approvals.")
+                        "A password is required for walk-in approvals."
+                    )
                 if len(password) < 8:
                     raise forms.ValidationError(
-                        "Password must be at least 8 characters.")
+                        "Password must be at least 8 characters."
+                    )
                 if password != confirm:
                     raise forms.ValidationError("Passwords do not match.")
 
@@ -212,150 +306,226 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 # Onboarding Admin
 # ─────────────────────────────────────────────────────────────
 
+
 @admin.register(ProviderOnboarding)
 class ProviderOnboardingAdmin(admin.ModelAdmin):
-
     form = ProviderOnboardingAdminForm
 
     list_display = (
-        'get_full_name', 'email', 'applicant_link', 'category', 'region',
-        'status_badge', 'age', 'hourly_rate', 'submitted_at',
+        "get_full_name",
+        "email",
+        "applicant_link",
+        "category",
+        "region",
+        "status_badge",
+        "age",
+        "hourly_rate",
+        "submitted_at",
     )
-    list_filter = ('status', 'category', 'region', 'submitted_at')
-    search_fields = ('first_name', 'last_name', 'email', 'phone')
+    list_filter = ("status", "category", "region", "submitted_at")
+    search_fields = ("first_name", "last_name", "email", "phone")
     readonly_fields = (
-        'id', 'age', 'provider_link', 'document_preview',
-        'submitted_at', 'reviewed_at', 'approved_at', 'rejected_at', 'updated_at',
+        "id",
+        "age",
+        "provider_link",
+        "document_preview",
+        "submitted_at",
+        "reviewed_at",
+        "approved_at",
+        "rejected_at",
+        "updated_at",
     )
-    actions = ['action_move_to_review', 'action_approve', 'action_reject']
+    actions = ["action_move_to_review", "action_approve", "action_reject"]
 
     fieldsets = (
-        ('Application Status', {
-            'fields': ('status', 'provider_link'),
-        }),
-        ('Pre-Registered Provider', {
-            'fields': ('applicant',),
-            'description': (
-                'Select the provider who pre-registered via the mobile app. '
-                'Their basic info will be prefilled below and can be edited before saving.'
-            ),
-        }),
-        ('Set Password — walk-ins only', {
-            'fields': ('set_password', 'confirm_password'),
-            'description': 'Leave blank if the provider registered via the app.',
-        }),
-        ('Personal Information', {
-            'fields': (
-                'first_name', 'last_name', 'email', 'phone',
-                'date_of_birth', 'age', 'profile_photo',
-            ),
-        }),
-        ('Location & Service', {
-            'fields': ('address', 'region', 'category'),
-        }),
-        ('Professional Details', {
-            'fields': ('hourly_rate', 'years_of_experience', 'bio'),
-        }),
-        ('Documents', {
-            'fields': (
-                'document_preview',
-                'nid_front', 'nid_back',
-                'police_clearance_certificate', 'professional_certificate',
-            ),
-        }),
-        ('Admin Review', {
-            'fields': ('reviewed_by', 'admin_notes', 'rejection_reason', 'change_requests'),
-        }),
-        ('Timestamps', {
-            'fields': (
-                'id', 'submitted_at', 'reviewed_at',
-                'approved_at', 'rejected_at', 'updated_at',
-            ),
-            'classes': ('collapse',),
-        }),
+        (
+            "Application Status",
+            {
+                "fields": ("status", "provider_link"),
+            },
+        ),
+        (
+            "Pre-Registered Provider",
+            {
+                "fields": ("applicant",),
+                "description": (
+                    "Select the provider who pre-registered via the mobile app. "
+                    "Their basic info will be prefilled below and can be edited before saving."
+                ),
+            },
+        ),
+        (
+            "Set Password — walk-ins only",
+            {
+                "fields": ("set_password", "confirm_password"),
+                "description": "Leave blank if the provider registered via the app.",
+            },
+        ),
+        (
+            "Personal Information",
+            {
+                "fields": (
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "phone",
+                    "date_of_birth",
+                    "age",
+                    "profile_photo",
+                ),
+            },
+        ),
+        (
+            "Location & Service",
+            {
+                "fields": ("address", "region", "category"),
+            },
+        ),
+        (
+            "Professional Details",
+            {
+                "fields": ("hourly_rate", "years_of_experience", "bio"),
+            },
+        ),
+        (
+            "Documents",
+            {
+                "fields": (
+                    "document_preview",
+                    "nid_front",
+                    "nid_back",
+                    "police_clearance_certificate",
+                    "professional_certificate",
+                ),
+            },
+        ),
+        (
+            "Admin Review",
+            {
+                "fields": (
+                    "reviewed_by",
+                    "admin_notes",
+                    "rejection_reason",
+                    "change_requests",
+                ),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": (
+                    "id",
+                    "submitted_at",
+                    "reviewed_at",
+                    "approved_at",
+                    "rejected_at",
+                    "updated_at",
+                ),
+                "classes": ("collapse",),
+            },
+        ),
     )
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related(
-            'region', 'category', 'reviewed_by', 'provider', 'applicant',
+        return (
+            super()
+            .get_queryset(request)
+            .select_related(
+                "region", "category", "reviewed_by", "provider", "applicant"
+            )
         )
 
     # ── Display ──────────────────────────────────────────────
 
-    @admin.display(description='Applicant')
+    @admin.display(description="Applicant")
     def applicant_link(self, obj):
         if not obj.applicant_id:
-            return mark_safe('<span style="color:#999;font-style:italic">Walk-in</span>')
-        url = reverse('admin:provider_provider_change',
-                      args=[obj.applicant_id])
+            return format_html(
+                '<span style="color:#999;font-style:italic">Walk-in</span>'
+            )
+        url = reverse("admin:provider_provider_change", args=[obj.applicant_id])
         return format_html('<a href="{}">{}</a>', url, obj.applicant.get_full_name())
 
-    @admin.display(description='Status')
+    @admin.display(description="Status")
     def status_badge(self, obj):
         colors = {
-            OnboardingStatus.PENDING:          '#FFA500',
-            OnboardingStatus.UNDER_REVIEW:     '#2196F3',
-            OnboardingStatus.CHANGES_REQUIRED: '#FF9800',
-            OnboardingStatus.APPROVED:         '#4CAF50',
-            OnboardingStatus.REJECTED:         '#F44336',
+            OnboardingStatus.PENDING: "#FFA500",
+            OnboardingStatus.UNDER_REVIEW: "#2196F3",
+            OnboardingStatus.CHANGES_REQUIRED: "#FF9800",
+            OnboardingStatus.APPROVED: "#4CAF50",
+            OnboardingStatus.REJECTED: "#F44336",
         }
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;'
-            'border-radius:10px;font-weight:bold;font-size:10px;'
+            "border-radius:10px;font-weight:bold;font-size:10px;"
             'text-transform:uppercase">{}</span>',
-            colors.get(obj.status, '#757575'),
+            colors.get(obj.status, "#757575"),
             obj.get_status_display(),
         )
 
-    @admin.display(description='Provider Account')
+    @admin.display(description="Provider Account")
     def provider_link(self, obj):
         if not obj.pk:
-            return '—'
+            return "—"
         if obj.provider_id:
-            url = reverse('admin:provider_provider_change',
-                          args=[obj.provider_id])
+            url = reverse("admin:provider_provider_change", args=[obj.provider_id])
             return format_html(
                 '<a href="{}" style="color:#4CAF50;font-weight:bold;padding:6px 12px;'
                 'background:#E8F5E9;border-radius:4px;text-decoration:none">'
-                'View Provider Account</a>',
+                "View Provider Account</a>",
                 url,
             )
-        return mark_safe('<span style="color:#999;font-style:italic">Not created yet</span>')
+        return format_html(
+            '<span style="color:#999;font-style:italic">Not created yet</span>'
+        )
 
-    @admin.display(description='Documents')
+    @admin.display(description="Documents")
     def document_preview(self, obj):
-        parts = [
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">']
+        parts = []
 
         def img_card(label, f):
-            return (
-                f'<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
-                f'<strong style="color:#666">{label}</strong><br><br>'
-                f'<img src="{f.url}" style="max-width:100%;max-height:200px;border-radius:4px">'
-                f'</div>'
+            return format_html(
+                '<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
+                '<strong style="color:#666">{}</strong><br><br>'
+                '<img src="{}" style="max-width:100%;max-height:200px;border-radius:4px">'
+                "</div>",
+                label,
+                f.url,
             )
 
         def link_card(label, f):
-            return (
-                f'<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
-                f'<strong style="color:#666">{label}</strong><br><br>'
-                f'<a href="{f.url}" target="_blank" style="color:#2196F3">View Document</a>'
-                f'</div>'
+            return format_html(
+                '<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
+                '<strong style="color:#666">{}</strong><br><br>'
+                '<a href="{}" target="_blank" style="color:#2196F3">View Document</a>'
+                "</div>",
+                label,
+                f.url,
             )
 
         if obj.nid_front:
-            parts.append(img_card('NID Front', obj.nid_front))
+            parts.append(img_card("NID Front", obj.nid_front))
         if obj.nid_back:
-            parts.append(img_card('NID Back', obj.nid_back))
+            parts.append(img_card("NID Back", obj.nid_back))
         if obj.police_clearance_certificate:
-            parts.append(link_card('Police Clearance',
-                         obj.police_clearance_certificate))
+            parts.append(
+                link_card("Police Clearance", obj.police_clearance_certificate)
+            )
         if obj.professional_certificate:
-            parts.append(link_card('Professional Certificate',
-                         obj.professional_certificate))
+            parts.append(
+                link_card("Professional Certificate", obj.professional_certificate)
+            )
 
-        parts.append('</div>')
-        return mark_safe(''.join(parts))
+        if not parts:
+            return format_html(
+                '<span style="color:#999">No documents uploaded yet.</span>'
+            )
+
+        wrapper = format_html(
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">{}</div>',
+            mark_safe("".join(parts)),  # noqa: S308
+        )
+        return wrapper
 
     # ── Save with FSM enforcement ────────────────────────────
 
@@ -391,9 +561,13 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         # FSM transition handlers
         try:
             if obj.status == OnboardingStatus.UNDER_REVIEW:
-                if old_status not in (OnboardingStatus.PENDING, OnboardingStatus.CHANGES_REQUIRED):
+                if old_status not in (
+                    OnboardingStatus.PENDING,
+                    OnboardingStatus.CHANGES_REQUIRED,
+                ):
                     raise ValueError(
-                        f"Cannot move to Under Review from '{old.get_status_display()}'.")
+                        f"Cannot move to Under Review from '{old.get_status_display()}'."
+                    )
                 obj.reviewed_by = request.user
                 obj.reviewed_at = timezone.now()
                 super().save_model(request, obj, form, change)
@@ -401,20 +575,23 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             elif obj.status == OnboardingStatus.APPROVED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
                     raise ValueError(
-                        "Application must be Under Review before approval.")
+                        "Application must be Under Review before approval."
+                    )
                 if old.provider:
                     self.message_user(
-                        request, "Provider account already exists.", messages.WARNING)
+                        request, "Provider account already exists.", messages.WARNING
+                    )
                     super().save_model(request, obj, form, change)
                 else:
-                    password = form.cleaned_data.get('set_password') or None
+                    password = form.cleaned_data.get("set_password") or None
                     old.approve(request.user, password=password)
                     return self._show_password_page(request, old, password)
 
             elif obj.status == OnboardingStatus.REJECTED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
                     raise ValueError(
-                        "Application must be Under Review before rejection.")
+                        "Application must be Under Review before rejection."
+                    )
                 obj.reviewed_by = request.user
                 obj.rejected_at = timezone.now()
                 if not obj.rejection_reason:
@@ -428,7 +605,8 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             elif obj.status == OnboardingStatus.CHANGES_REQUIRED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
                     raise ValueError(
-                        "Application must be Under Review to request changes.")
+                        "Application must be Under Review to request changes."
+                    )
                 obj.reviewed_by = request.user
                 obj.reviewed_at = timezone.now()
                 if not obj.change_requests:
@@ -446,17 +624,18 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
     def _show_password_page(self, request, application, password):
         """One-time password display — shown once after approval, never stored in plaintext."""
-        back_url = reverse('admin:provider_provideronboarding_changelist')
-        provider_url = reverse('admin:provider_provider_change', args=[
-                               application.provider_id])
+        back_url = reverse("admin:provider_provideronboarding_changelist")
+        provider_url = reverse(
+            "admin:provider_provider_change", args=[application.provider_id]
+        )
         password_section = (
             f'<tr><td style="padding:10px;color:#666">Password</td>'
             f'<td style="padding:10px;font-family:monospace;font-size:20px;'
             f'font-weight:bold;color:#1565C0;letter-spacing:2px">{password}</td></tr>'
-            if password else
-            '<tr><td style="padding:10px;color:#666">Password</td>'
+            if password
+            else '<tr><td style="padding:10px;color:#666">Password</td>'
             '<td style="padding:10px;color:#999;font-style:italic">'
-            'Set by provider during registration</td></tr>'
+            "Set by provider during registration</td></tr>"
         )
         return HttpResponse(f"""
         <html><body style="font-family:sans-serif;padding:40px;max-width:620px;margin:auto">
@@ -506,16 +685,21 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 app.move_to_review(request.user)
                 success += 1
             except Exception as exc:
-                logger.error("Error moving %s to review: %s",
-                             app.pk, exc, exc_info=True)
+                logger.error(
+                    "Error moving %s to review: %s", app.pk, exc, exc_info=True
+                )
                 self.message_user(request, f"Error: {exc}", messages.ERROR)
 
         if success:
             self.message_user(
-                request, f"{success} application(s) moved to Under Review.", messages.SUCCESS)
+                request,
+                f"{success} application(s) moved to Under Review.",
+                messages.SUCCESS,
+            )
         if skip:
             self.message_user(
-                request, f"{skip} skipped (wrong status).", messages.WARNING)
+                request, f"{skip} skipped (wrong status).", messages.WARNING
+            )
 
     @admin.action(description="✅ Approve — opens detail page to set password")
     def action_approve(self, request, queryset):
@@ -530,8 +714,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             return
 
         if len(eligible) == 1:
-            url = reverse('admin:provider_provideronboarding_change', args=[
-                          eligible[0].pk])
+            url = reverse(
+                "admin:provider_provideronboarding_change", args=[eligible[0].pk]
+            )
             return redirect(url)
 
         self.message_user(
@@ -548,17 +733,17 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 skip += 1
                 continue
             try:
-                app.reject(
-                    request.user, reason=app.admin_notes or "Rejected by admin.")
+                app.reject(request.user, reason=app.admin_notes or "Rejected by admin.")
                 success += 1
             except Exception as exc:
-                logger.error("Error rejecting %s: %s",
-                             app.pk, exc, exc_info=True)
+                logger.error("Error rejecting %s: %s", app.pk, exc, exc_info=True)
                 self.message_user(request, f"Error: {exc}", messages.ERROR)
 
         if success:
             self.message_user(
-                request, f"{success} application(s) rejected.", messages.WARNING)
+                request, f"{success} application(s) rejected.", messages.WARNING
+            )
         if skip:
             self.message_user(
-                request, f"{skip} skipped (wrong status).", messages.WARNING)
+                request, f"{skip} skipped (wrong status).", messages.WARNING
+            )

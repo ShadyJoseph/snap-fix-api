@@ -21,6 +21,7 @@ class ProviderRegisterView(generics.CreateAPIView):
     personal details via the admin dashboard, then approve the account.
     No token is issued here since the account is inactive.
     """
+
     serializer_class = ProviderRegisterSerializer
     permission_classes = [permissions.AllowAny]
 
@@ -30,9 +31,9 @@ class ProviderRegisterView(generics.CreateAPIView):
         serializer.save()
         return Response(
             {
-                'message': (
-                    'Registration received. Please visit our office to complete '
-                    'your verification. You will be able to log in once approved.'
+                "message": (
+                    "Registration received. Please visit our office to complete "
+                    "your verification. You will be able to log in once approved."
                 )
             },
             status=status.HTTP_201_CREATED,
@@ -48,22 +49,26 @@ class ProviderLoginView(generics.GenericAPIView):
       - is_active=True  (set by staff on approval)
       - verification_status=verified
     """
+
     serializer_class = ProviderLoginSerializer
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user']
+        user = serializer.validated_data["user"]
         _, token = AuthToken.objects.create(user)
-        return Response({
-            'provider': ProviderSerializer(user.provider).data,
-            'token': token,
-        })
+        return Response(
+            {
+                "provider": ProviderSerializer(user.provider).data,
+                "token": token,
+            }
+        )
 
 
 class ProviderLogoutView(KnoxLogoutView):
     """POST /api/v1/providers/logout/"""
+
     permission_classes = [permissions.IsAuthenticated]
 
 
@@ -73,10 +78,11 @@ class ProviderProfileView(generics.RetrieveAPIView):
 
     Returns the full profile of the currently authenticated provider.
     """
+
     serializer_class = ProviderProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        if not hasattr(self.request.user, 'provider'):
+        if not hasattr(self.request.user, "provider"):
             raise PermissionDenied("No provider account found.")
         return self.request.user.provider  # type: ignore

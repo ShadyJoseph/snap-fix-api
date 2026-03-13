@@ -10,16 +10,13 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "django-insecure-1ht9p4s36j40mbccl6nn7i^i@%w4j+9dygzt(i+hhgwh77)a#@"
+    "SECRET_KEY", "django-insecure-1ht9p4s36j40mbccl6nn7i^i@%w4j+9dygzt(i+hhgwh77)a#@"
 )
 
 DEBUG = os.getenv("DEBUG", "True") == "True"
 
 ALLOWED_HOSTS = (
-    os.getenv("ALLOWED_HOSTS", "").split(",")
-    if os.getenv("ALLOWED_HOSTS")
-    else []
+    os.getenv("ALLOWED_HOSTS", "").split(",") if os.getenv("ALLOWED_HOSTS") else []
 )
 
 # Application definition
@@ -93,32 +90,36 @@ WSGI_APPLICATION = "config.wsgi.application"
 def _parse_db_url(url):
     p = urlparse(url)
     return {
-        "ENGINE":   "django.contrib.gis.db.backends.postgis",
-        "NAME":     p.path.lstrip("/"),
-        "USER":     p.username,
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
+        "NAME": p.path.lstrip("/"),
+        "USER": p.username,
         "PASSWORD": p.password,
-        "HOST":     p.hostname,
-        "PORT":     str(p.port or 5432),
+        "HOST": p.hostname,
+        "PORT": str(p.port or 5432),
     }
 
 
 _database_url = os.getenv("DATABASE_URL")
 
 DATABASES = {
-    "default": _parse_db_url(_database_url) if _database_url else {
-        "ENGINE":   "django.contrib.gis.db.backends.postgis",
-        "NAME":     os.getenv("DB_NAME", "snapfix_db"),
-        "USER":     os.getenv("DB_USER", "postgres"),
+    "default": _parse_db_url(_database_url)
+    if _database_url
+    else {
+        "ENGINE": "django.contrib.gis.db.backends.postgis",
+        "NAME": os.getenv("DB_NAME", "snapfix_db"),
+        "USER": os.getenv("DB_USER", "postgres"),
         "PASSWORD": os.getenv("DB_PASSWORD", "postgres"),
-        "HOST":     os.getenv("DB_HOST", "db"),
-        "PORT":     os.getenv("DB_PORT", "5432"),
+        "HOST": os.getenv("DB_HOST", "db"),
+        "PORT": os.getenv("DB_PORT", "5432"),
     }
 }
 
 # ─────────────────────────────────────────────────────────────
 
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
