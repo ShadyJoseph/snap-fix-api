@@ -2,6 +2,6 @@ from django.apps import AppConfig
 
 
 class ProviderConfig(AppConfig):
-    default_auto_field = 'django.db.models.BigAutoField'
-    name = 'apps.provider'
-    verbose_name = 'Provider Management'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "apps.provider"
+    verbose_name = "Provider Management"

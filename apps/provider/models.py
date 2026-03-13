@@ -11,14 +11,15 @@ from django.core.validators import (
 from django.db import models, transaction
 from django.utils import timezone
 
+from apps.staff.models import Staff
 from apps.user.models import User
 
 from .choices import OnboardingStatus, ProviderVerificationStatus
 from .managers import ProviderManager, ProviderOnboardingManager
 
 phone_validator = RegexValidator(
-    regex=r'^(\+?20)?01[0125]\d{8}$',
-    message="Must be a valid Egyptian mobile number (e.g., 01012345678 or +201012345678)."
+    regex=r"^(\+?20)?01[0125]\d{8}$",
+    message="Must be a valid Egyptian mobile number (e.g., 01012345678 or +201012345678).",
 )
 
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
@@ -43,15 +44,16 @@ class Provider(User):
 
     # Service
     categories = models.ManyToManyField(
-        'core.Category',
-        related_name='providers',
+        "core.Category",
+        related_name="providers",
         blank=True,
     )
     region = models.ForeignKey(
-        'core.Region',
+        "core.Region",
         on_delete=models.PROTECT,
-        related_name='providers',
-        null=True, blank=True,
+        related_name="providers",
+        null=True,
+        blank=True,
     )
 
     # Business
@@ -62,20 +64,24 @@ class Provider(User):
         validators=[MinValueValidator(0)],
     )
     hourly_rate = models.DecimalField(
-        max_digits=10, decimal_places=2,
-        blank=True, null=True,
+        max_digits=10,
+        decimal_places=2,
+        blank=True,
+        null=True,
         validators=[MinValueValidator(0)],
     )
 
     # Financial
     total_earnings = models.DecimalField(
-        max_digits=10, decimal_places=2,
-        default=Decimal('0.00'),
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
         validators=[MinValueValidator(0)],
     )
     available_balance = models.DecimalField(
-        max_digits=10, decimal_places=2,
-        default=Decimal('0.00'),
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("0.00"),
         validators=[MinValueValidator(0)],
     )
 
@@ -88,26 +94,24 @@ class Provider(User):
     )
 
     # Statistics
-    total_jobs = models.IntegerField(
-        default=0, validators=[MinValueValidator(0)])
-    completed_jobs = models.IntegerField(
-        default=0, validators=[MinValueValidator(0)])
+    total_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
+    completed_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     average_rating = models.DecimalField(
-        max_digits=3, decimal_places=2,
-        default=Decimal('0.00'),
+        max_digits=3,
+        decimal_places=2,
+        default=Decimal("0.00"),
         validators=[MinValueValidator(0)],
     )
-    total_reviews = models.IntegerField(
-        default=0, validators=[MinValueValidator(0)])
+    total_reviews = models.IntegerField(default=0, validators=[MinValueValidator(0)])
 
     class Meta:
-        db_table = 'providers'
-        verbose_name = 'Provider'
-        verbose_name_plural = 'Providers'
+        db_table = "providers"
+        verbose_name = "Provider"
+        verbose_name_plural = "Providers"
         indexes = [
-            models.Index(fields=['verification_status']),
-            models.Index(fields=['is_available']),
-            models.Index(fields=['region', 'is_available']),
+            models.Index(fields=["verification_status"]),
+            models.Index(fields=["is_available"]),
+            models.Index(fields=["region", "is_available"]),
         ]
 
     def __str__(self):
@@ -119,12 +123,12 @@ class Provider(User):
         if amount > 0:
             self.total_earnings += amount
             self.available_balance += amount
-            self.save(update_fields=['total_earnings', 'available_balance'])
+            self.save(update_fields=["total_earnings", "available_balance"])
 
     def withdraw_balance(self, amount):
         if amount > 0 and self.available_balance >= amount:
             self.available_balance -= amount
-            self.save(update_fields=['available_balance'])
+            self.save(update_fields=["available_balance"])
             return True
         return False
 
@@ -132,11 +136,11 @@ class Provider(User):
 
     def increment_jobs(self):
         self.total_jobs += 1
-        self.save(update_fields=['total_jobs'])
+        self.save(update_fields=["total_jobs"])
 
     def increment_completed_jobs(self):
         self.completed_jobs += 1
-        self.save(update_fields=['completed_jobs'])
+        self.save(update_fields=["completed_jobs"])
 
     def get_completion_rate(self):
         if self.total_jobs == 0:
@@ -148,7 +152,7 @@ class Provider(User):
             total = self.average_rating * self.total_reviews
             self.total_reviews += 1
             self.average_rating = (total + new_rating) / self.total_reviews
-            self.save(update_fields=['average_rating', 'total_reviews'])
+            self.save(update_fields=["average_rating", "total_reviews"])
 
 
 class ProviderOnboarding(models.Model):
@@ -167,8 +171,9 @@ class ProviderOnboarding(models.Model):
     applicant = models.OneToOneField(
         Provider,
         on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name='pending_application',
+        null=True,
+        blank=True,
+        related_name="pending_application",
     )
 
     # Personal
@@ -181,19 +186,20 @@ class ProviderOnboarding(models.Model):
     # Location
     address = models.TextField()
     region = models.ForeignKey(
-        'core.Region',
+        "core.Region",
         on_delete=models.PROTECT,
-        related_name='onboarding_applications',
+        related_name="onboarding_applications",
     )
 
     # Service
     category = models.ForeignKey(
-        'core.Category',
+        "core.Category",
         on_delete=models.PROTECT,
-        related_name='onboarding_applications',
+        related_name="onboarding_applications",
     )
     hourly_rate = models.DecimalField(
-        max_digits=10, decimal_places=2,
+        max_digits=10,
+        decimal_places=2,
         validators=[MinValueValidator(0)],
     )
     years_of_experience = models.IntegerField(
@@ -204,26 +210,28 @@ class ProviderOnboarding(models.Model):
 
     # Documents — single source of truth, never copied to Provider
     nid_front = models.ImageField(
-        upload_to='onboarding/nid/front/',
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        upload_to="onboarding/nid/front/",
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png", "pdf"])],
     )
     nid_back = models.ImageField(
-        upload_to='onboarding/nid/back/',
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        upload_to="onboarding/nid/back/",
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png", "pdf"])],
     )
     police_clearance_certificate = models.FileField(
-        upload_to='onboarding/pcc/',
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        upload_to="onboarding/pcc/",
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png", "pdf"])],
     )
     professional_certificate = models.FileField(
-        upload_to='onboarding/certificates/',
-        blank=True, null=True,
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png', 'pdf'])],
+        upload_to="onboarding/certificates/",
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png", "pdf"])],
     )
     profile_photo = models.ImageField(
-        upload_to='onboarding/photos/',
-        blank=True, null=True,
-        validators=[FileExtensionValidator(['jpg', 'jpeg', 'png'])],
+        upload_to="onboarding/photos/",
+        blank=True,
+        null=True,
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png"])],
     )
 
     # FSM
@@ -236,10 +244,11 @@ class ProviderOnboarding(models.Model):
 
     # Review
     reviewed_by = models.ForeignKey(
-        User,
+        Staff,
         on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name='reviewed_onboardings',
+        null=True,
+        blank=True,
+        related_name="reviewed_onboardings",
     )
     admin_notes = models.TextField(blank=True)
     rejection_reason = models.TextField(blank=True)
@@ -249,8 +258,9 @@ class ProviderOnboarding(models.Model):
     provider = models.OneToOneField(
         Provider,
         on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name='onboarding_application',
+        null=True,
+        blank=True,
+        related_name="onboarding_application",
     )
 
     # Timestamps
@@ -263,14 +273,14 @@ class ProviderOnboarding(models.Model):
     objects = ProviderOnboardingManager()
 
     class Meta:
-        db_table = 'provider_onboarding'
-        verbose_name = 'Provider Onboarding Application'
-        verbose_name_plural = 'Provider Onboarding Applications'
-        ordering = ['-submitted_at']
+        db_table = "provider_onboarding"
+        verbose_name = "Provider Onboarding Application"
+        verbose_name_plural = "Provider Onboarding Applications"
+        ordering = ["-submitted_at"]
         indexes = [
-            models.Index(fields=['status', '-submitted_at']),
-            models.Index(fields=['email']),
-            models.Index(fields=['region', 'category', 'status']),
+            models.Index(fields=["status", "-submitted_at"]),
+            models.Index(fields=["email"]),
+            models.Index(fields=["region", "category", "status"]),
         ]
 
     def __str__(self):
@@ -283,14 +293,15 @@ class ProviderOnboarding(models.Model):
     def age(self):
         today = date.today()
         born = self.date_of_birth
-        return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        return (
+            today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+        )
 
     def clean(self):
         super().clean()
 
         if self.date_of_birth and self.age < 18:
-            raise ValidationError(
-                {'date_of_birth': 'Applicant must be 18 or older.'})
+            raise ValidationError({"date_of_birth": "Applicant must be 18 or older."})
 
         # Allow if the email belongs to a pending, inactive Provider (mobile pre-registration)
         if not self.pk and User.objects.filter(email=self.email).exists():
@@ -300,24 +311,28 @@ class ProviderOnboarding(models.Model):
                 verification_status=ProviderVerificationStatus.PENDING,
             ).exists()
             if not is_pending_provider:
-                raise ValidationError(
-                    {'email': 'This email is already registered.'})
+                raise ValidationError({"email": "This email is already registered."})
 
         # File size validation
         file_fields = [
-            'nid_front', 'nid_back', 'police_clearance_certificate',
-            'professional_certificate', 'profile_photo',
+            "nid_front",
+            "nid_back",
+            "police_clearance_certificate",
+            "professional_certificate",
+            "profile_photo",
         ]
         for field_name in file_fields:
             f = getattr(self, field_name)
-            if f and hasattr(f, 'size') and f.size > MAX_FILE_SIZE:
-                raise ValidationError(
-                    {field_name: 'File size must not exceed 5MB.'})
+            if f and hasattr(f, "size") and f.size > MAX_FILE_SIZE:
+                raise ValidationError({field_name: "File size must not exceed 5MB."})
 
     # ── FSM Guards ───────────────────────────────────────────
 
     def can_review(self):
-        return self.status in (OnboardingStatus.PENDING, OnboardingStatus.CHANGES_REQUIRED)
+        return self.status in (
+            OnboardingStatus.PENDING,
+            OnboardingStatus.CHANGES_REQUIRED,
+        )
 
     def can_approve(self):
         return self.status == OnboardingStatus.UNDER_REVIEW
@@ -332,8 +347,7 @@ class ProviderOnboarding(models.Model):
 
     def move_to_review(self, admin_user):
         if not self.can_review():
-            raise ValueError(
-                f"Cannot move to Under Review from '{self.status}'.")
+            raise ValueError(f"Cannot move to Under Review from '{self.status}'.")
         self.status = OnboardingStatus.UNDER_REVIEW
         self.reviewed_by = admin_user
         self.reviewed_at = timezone.now()
@@ -356,14 +370,16 @@ class ProviderOnboarding(models.Model):
 
         # Use linked applicant if present, otherwise fall back to email lookup
         existing_user = (
-            self.applicant if self.applicant_id
+            self.applicant
+            if self.applicant_id
             else User.objects.filter(email=self.email).first()
         )
 
         if existing_user is not None:
-            if not hasattr(existing_user, 'provider'):
+            if not hasattr(existing_user, "provider"):
                 raise ValueError(
-                    f"'{self.email}' exists but is not a provider account.")
+                    f"'{self.email}' exists but is not a provider account."
+                )
 
             provider = existing_user.provider  # type: ignore
             provider.is_active = True
@@ -383,7 +399,8 @@ class ProviderOnboarding(models.Model):
         else:
             if not password:
                 raise ValueError(
-                    "Password is required when no prior registration exists.")
+                    "Password is required when no prior registration exists."
+                )
 
             provider = Provider.objects.create_user(  # type: ignore
                 email=self.email,

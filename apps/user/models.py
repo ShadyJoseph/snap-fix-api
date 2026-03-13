@@ -15,18 +15,21 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True, db_index=True)
-    phone = models.CharField(max_length=20, blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True)
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
 
     # Profile fields
     profile_picture = models.ImageField(
-        upload_to='profile_pictures/', blank=True, null=True)
-    address = models.TextField(blank=True, null=True)
+        upload_to="profile_pictures/", blank=True, null=True
+    )
+    address = models.TextField(blank=True)
     latitude = models.DecimalField(
-        max_digits=9, decimal_places=6, blank=True, null=True)
+        max_digits=9, decimal_places=6, blank=True, null=True
+    )
     longitude = models.DecimalField(
-        max_digits=9, decimal_places=6, blank=True, null=True)
+        max_digits=9, decimal_places=6, blank=True, null=True
+    )
 
     # Status fields
     is_active = models.BooleanField(default=True)
@@ -40,14 +43,14 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['first_name', 'last_name']
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = ["first_name", "last_name"]
 
     class Meta:
-        db_table = 'users'
-        verbose_name = 'User'
-        verbose_name_plural = 'Users'
-        ordering = ['-date_joined']
+        db_table = "users"
+        verbose_name = "User"
+        verbose_name_plural = "Users"
+        ordering = ["-date_joined"]
 
     def __str__(self):
         return f"{self.email}"
@@ -57,10 +60,10 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def get_user_type(self):
         """Return the actual user type"""
-        if hasattr(self, 'customer'):
-            return 'customer'
-        elif hasattr(self, 'provider'):
-            return 'provider'
-        elif hasattr(self, 'admin_profile'):
-            return 'admin'
-        return 'user'
+        if hasattr(self, "customer"):
+            return "customer"
+        elif hasattr(self, "provider"):
+            return "provider"
+        elif hasattr(self, "admin_profile"):
+            return "admin"
+        return "user"

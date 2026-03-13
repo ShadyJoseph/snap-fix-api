@@ -8,26 +8,22 @@ class Staff(User):
 
     # Permissions
     can_manage_users = models.BooleanField(
-        default=True,
-        help_text="Can manage (create, update, delete) users"
+        default=True, help_text="Can manage (create, update, delete) users"
     )
     can_manage_services = models.BooleanField(
-        default=True,
-        help_text="Can manage service categories and listings"
+        default=True, help_text="Can manage service categories and listings"
     )
     can_manage_payments = models.BooleanField(
-        default=True,
-        help_text="Can view and manage payment transactions"
+        default=True, help_text="Can view and manage payment transactions"
     )
     can_view_analytics = models.BooleanField(
-        default=True,
-        help_text="Can view platform analytics and reports"
+        default=True, help_text="Can view platform analytics and reports"
     )
 
     class Meta:
-        db_table = 'staff'
-        verbose_name = 'Staff'
-        verbose_name_plural = 'Staff'
+        db_table = "staff"
+        verbose_name = "Staff"
+        verbose_name_plural = "Staff"
 
     def __str__(self):
         return f"Staff: {self.get_full_name()}"
@@ -35,10 +31,10 @@ class Staff(User):
     def has_permission(self, permission_type):
         """Check if staff has specific permission"""
         permission_map = {
-            'users': self.can_manage_users,
-            'services': self.can_manage_services,
-            'payments': self.can_manage_payments,
-            'analytics': self.can_view_analytics,
+            "users": self.can_manage_users,
+            "services": self.can_manage_services,
+            "payments": self.can_manage_payments,
+            "analytics": self.can_view_analytics,
         }
         return permission_map.get(permission_type, False)
 

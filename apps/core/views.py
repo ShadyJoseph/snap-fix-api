@@ -6,6 +6,7 @@ from .serializers import CategorySerializer, RegionSerializer
 
 class CategoryListView(generics.ListAPIView):
     """GET /api/v1/core/categories/"""
+
     serializer_class = CategorySerializer
     permission_classes = [permissions.AllowAny]
 
@@ -15,6 +16,7 @@ class CategoryListView(generics.ListAPIView):
 
 class RegionListView(generics.ListAPIView):
     """GET /api/v1/core/regions/"""
+
     serializer_class = RegionSerializer
     permission_classes = [permissions.AllowAny]
 
