@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+import cloudinary
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,7 +11,8 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv(
-    "SECRET_KEY", "django-insecure-1ht9p4s36j40mbccl6nn7i^i@%w4j+9dygzt(i+hhgwh77)a#@"
+    "SECRET_KEY",
+    "django-insecure-1ht9p4s36j40mbccl6nn7i^i@%w4j+9dygzt(i+hhgwh77)a#@",
 )
 
 DEBUG = os.getenv("DEBUG", "True") == "True"
@@ -19,7 +21,6 @@ ALLOWED_HOSTS = (
     os.getenv("ALLOWED_HOSTS", "").split(",") if os.getenv("ALLOWED_HOSTS") else []
 )
 
-# Application definition
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -28,6 +29,8 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.gis",
     "django.contrib.staticfiles",
+    "cloudinary_storage",
+    "cloudinary",
     "rest_framework",
     "knox",
     "corsheaders",
@@ -51,9 +54,6 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-# Static files
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
-
 ROOT_URLCONF = "config.urls"
 
 CSRF_TRUSTED_ORIGINS = [
@@ -61,7 +61,6 @@ CSRF_TRUSTED_ORIGINS = [
     for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
     if origin.strip()
 ]
-
 
 TEMPLATES = [
     {
@@ -81,10 +80,10 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# ── Database ─────────────────────────────────────────────────
-# Production (Railway): uses DATABASE_URL
-# Local (Docker):       uses individual DB_* vars
-# ─────────────────────────────────────────────────────────────
+
+# ── Database ──────────────────────────────────────────────────
+# Production (Railway): DATABASE_URL env var
+# Local (Docker):       individual DB_* env vars
 
 
 def _parse_db_url(url):
@@ -99,11 +98,9 @@ def _parse_db_url(url):
     }
 
 
-_database_url = os.getenv("DATABASE_URL")
-
 DATABASES = {
-    "default": _parse_db_url(_database_url)
-    if _database_url
+    "default": _parse_db_url(os.getenv("DATABASE_URL"))
+    if os.getenv("DATABASE_URL")
     else {
         "ENGINE": "django.contrib.gis.db.backends.postgis",
         "NAME": os.getenv("DB_NAME", "snapfix_db"),
@@ -114,7 +111,48 @@ DATABASES = {
     }
 }
 
-# ─────────────────────────────────────────────────────────────
+
+# ── Static files ──────────────────────────────────────────────
+# Whitenoise serves static files in production (admin CSS/JS etc.)
+
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+
+
+# ── Media files ───────────────────────────────────────────────
+# Local:      Django serves from MEDIA_ROOT via /media/ (DEBUG only)
+# Production: Cloudinary stores and serves all uploaded files
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+
+_cloudinary_ready = all(
+    os.getenv(k)
+    for k in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET")
+)
+
+if _cloudinary_ready:
+    cloudinary.config(
+        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+        api_key=os.getenv("CLOUDINARY_API_KEY"),
+        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    )
+    CLOUDINARY_STORAGE = {
+        "CLOUD_NAME": os.getenv("CLOUDINARY_CLOUD_NAME"),
+        "API_KEY": os.getenv("CLOUDINARY_API_KEY"),
+        "API_SECRET": os.getenv("CLOUDINARY_API_SECRET"),
+    }
+    DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+
+
+# ── Auth ──────────────────────────────────────────────────────
+
+AUTH_USER_MODEL = "user.User"
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -125,43 +163,46 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# Internationalization
-# https://docs.djangoproject.com/en/6.0/topics/i18n/
+
+# ── Internationalisation ──────────────────────────────────────
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = "static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
-
-# Media files (User uploads)
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
-
-FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5MB
+# ── Misc ──────────────────────────────────────────────────────
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Custom user model
-AUTH_USER_MODEL = "user.User"
 
-# Django REST Framework
+# ── DRF ───────────────────────────────────────────────────────
+
 REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": [
-        "knox.auth.TokenAuthentication",
-    ],
-    "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
-    ],
+    "DEFAULT_AUTHENTICATION_CLASSES": ["knox.auth.TokenAuthentication"],
+    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 10,
 }
+
+
+# ── CORS ──────────────────────────────────────────────────────
+
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost(:\d+)?$",
+    r"^http://127\.0\.0\.1(:\d+)?$",
+    r"^exp://.*$",
+]
+CORS_ALLOW_CREDENTIALS = True
+
+
+# ── Logging ───────────────────────────────────────────────────
 
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -207,17 +248,3 @@ if "test" in sys.argv:
         "handlers": {"null": {"class": "logging.NullHandler"}},
         "root": {"handlers": ["null"]},
     }
-
-CORS_ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
-    if origin.strip()
-]
-
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://localhost(:\d+)?$",
-    r"^http://127\.0\.0\.1(:\d+)?$",
-    r"^exp://.*$",
-]
-
-CORS_ALLOW_CREDENTIALS = True

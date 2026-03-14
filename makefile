@@ -1,63 +1,72 @@
-# Development
+.PHONY: up upd down down-v logs migrate makemigrations superuser shell bash \
+        test test-app test-class test-v \
+        lint format security fix clean
+
+DC      = docker compose
+MANAGE  = $(DC) exec web python manage.py
+
+# ── Docker ────────────────────────────────────────────────────
+
 up:
-	docker compose up --build
+	$(DC) up --build
 
 upd:
-	docker compose up --build -d
+	$(DC) up --build -d
 
 down:
-	docker compose down
+	$(DC) down
 
 down-v:
-	docker compose down -v
+	$(DC) down -v
 
 logs:
-	docker compose logs -f web
+	$(DC) logs -f web
 
-# Django
+# ── Django ────────────────────────────────────────────────────
+
 migrate:
-	docker compose exec web python manage.py migrate
-
-superuser:
-	docker compose exec web python manage.py createsuperuser
-
-shell:
-	docker compose exec web python manage.py shell
-
-bash:
-	docker compose exec web bash
+	$(MANAGE) migrate
 
 makemigrations:
-	docker compose exec web python manage.py makemigrations
+	$(MANAGE) makemigrations
 
-# Testing
+superuser:
+	$(MANAGE) createsuperuser
+
+shell:
+	$(MANAGE) shell
+
+bash:
+	$(DC) exec web bash
+
+# ── Testing ───────────────────────────────────────────────────
+
 test:
-	docker compose exec web python manage.py test
-
-test-app:
-	docker compose exec web python manage.py test $(app)
-
-test-class:
-	docker compose exec web python manage.py test $(path)
+	$(MANAGE) test
 
 test-v:
-	docker compose exec web python manage.py test --verbosity=2
+	$(MANAGE) test --verbosity=2
 
-# Code Quality
+test-app:
+	$(MANAGE) test $(app)
+
+test-class:
+	$(MANAGE) test $(path)
+
+# ── Code Quality ──────────────────────────────────────────────
+
 lint:
-	docker compose exec web ruff check .
+	$(DC) exec web ruff check .
 
 format:
-	docker compose exec web ruff format . --check
+	$(DC) exec web ruff format . --check
 
 security:
-	docker compose exec web bandit -r .
+	$(DC) exec web bandit -r . -q
 
 fix:
-	docker compose exec web ruff check . --fix
-	docker compose exec web ruff format .
+	$(DC) exec web ruff check . --fix
+	$(DC) exec web ruff format .
 
-clean:
-	@echo "Running all fixes and checks..."
-	docker compose exec web ruff check . --fix
-	docker compose exec web ruff format .
+clean: fix
+	@echo "✓ All fixes and checks complete."

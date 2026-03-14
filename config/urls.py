@@ -16,10 +16,11 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/customers/", include("apps.customer.urls")),
     path("api/v1/providers/", include("apps.provider.urls")),
-    path("api/v1/bookings/", include("apps.booking.urls")),
     path("api/v1/core/", include("apps.core.urls")),
+    path("api/v1/bookings/", include("apps.booking.urls")),
 ]
 
+# Local dev only — in production, media is served by Cloudinary
+# and static files are served by Whitenoise (no Django serving needed)
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

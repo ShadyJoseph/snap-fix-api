@@ -19,16 +19,13 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATUSES = (OnboardingStatus.APPROVED, OnboardingStatus.REJECTED)
 
 
-# ── Helper ────────────────────────────────────────────────────────────────────
+# ── Helper ────────────────────────────────────────────────────
 
 
 def get_reviewer(request_user):
     """
-    Return a Staff instance to use as reviewed_by.
-
-    - If the user IS a Staff instance, return it directly.
-    - If the user is a superuser (but not Staff), return None —
-      the field is nullable so this is safe and avoids a FK type error.
+    Return a Staff instance for reviewed_by.
+    Superusers who are not Staff return None — the field is nullable.
     """
     if isinstance(request_user, Staff):
         return request_user
@@ -96,30 +93,10 @@ class ProviderAdmin(admin.ModelAdmin):
                 ),
             },
         ),
-        (
-            "Business",
-            {
-                "fields": ("business_name", "bio"),
-            },
-        ),
-        (
-            "Financial",
-            {
-                "fields": ("total_earnings", "available_balance"),
-            },
-        ),
-        (
-            "Availability",
-            {
-                "fields": ("is_available",),
-            },
-        ),
-        (
-            "Location",
-            {
-                "fields": ("address", "latitude", "longitude"),
-            },
-        ),
+        ("Business", {"fields": ("business_name", "bio")}),
+        ("Financial", {"fields": ("total_earnings", "available_balance")}),
+        ("Availability", {"fields": ("is_available",)}),
+        ("Location", {"fields": ("address", "latitude", "longitude")}),
         (
             "Statistics",
             {
@@ -259,6 +236,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         self.fields["applicant"].widget.can_add_related = False
         self.fields["applicant"].widget.can_change_related = False
 
+        # Prefill personal fields from linked applicant
         instance = kwargs.get("instance")
         if instance and instance.applicant_id:
             applicant = instance.applicant
@@ -284,7 +262,11 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         if status == OnboardingStatus.APPROVED and not already_approved:
             email = self.instance.email if self.instance else cleaned.get("email")
             has_preregistration = (
-                applicant or User.objects.filter(email=email, is_active=False).exists()
+                applicant
+                or User.objects.filter(
+                    email=email,
+                    is_active=False,
+                ).exists()
             )
 
             if not has_preregistration:
@@ -307,7 +289,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 
 
 # ─────────────────────────────────────────────────────────────
-# Onboarding Admin — shared fieldset fragments
+# Onboarding Admin
 # ─────────────────────────────────────────────────────────────
 
 _FIELDSET_PRE_REGISTERED = (
@@ -337,14 +319,7 @@ _FIELDSET_PROFESSIONAL = (
 )
 _FIELDSET_REVIEW = (
     "Admin Review",
-    {
-        "fields": (
-            "reviewed_by",
-            "admin_notes",
-            "rejection_reason",
-            "change_requests",
-        ),
-    },
+    {"fields": ("reviewed_by", "admin_notes", "rejection_reason", "change_requests")},
 )
 
 
@@ -367,8 +342,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     search_fields = ("first_name", "last_name", "email", "phone")
     actions = ["action_move_to_review", "action_approve", "action_reject"]
 
-    # readonly_fields managed via get_readonly_fields — see comment there.
-
     def get_readonly_fields(self, request, obj=None):
         readonly = [
             "id",
@@ -379,9 +352,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             "updated_at",
         ]
         if obj is not None:
-            # Callables / properties only valid on existing records —
-            # must be in readonly_fields at the same time they appear in fieldsets
-            # or Django crashes resolving them as form fields.
             readonly += ["age", "provider_link", "document_preview"]
         return readonly
 
@@ -421,10 +391,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             )
 
         return (
-            (
-                "Application Status",
-                {"fields": ("status", "provider_link")},
-            ),
+            ("Application Status", {"fields": ("status", "provider_link")}),
             _FIELDSET_PRE_REGISTERED,
             _FIELDSET_PASSWORD,
             (
@@ -562,8 +529,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
         return mark_safe(  # noqa: S308
             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
-            f"{''.join(parts)}"
-            f"</div>"
+            f"{''.join(parts)}</div>"
         )
 
     # ── Save with FSM enforcement ────────────────────────────
@@ -580,7 +546,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             return
 
         old_status = old.status
+        new_status = obj.status
 
+        # Block any edits on terminal states
         if old_status in TERMINAL_STATUSES:
             self.message_user(
                 request,
@@ -591,14 +559,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             super().save_model(request, obj, form, change)
             return
 
-        if old_status == obj.status:
+        # No status change — field-only update, save freely
+        if old_status == new_status:
             super().save_model(request, obj, form, change)
             return
 
         reviewer = get_reviewer(request.user)
 
         try:
-            if obj.status == OnboardingStatus.UNDER_REVIEW:
+            if new_status == OnboardingStatus.UNDER_REVIEW:
                 if old_status not in (
                     OnboardingStatus.PENDING,
                     OnboardingStatus.CHANGES_REQUIRED,
@@ -610,25 +579,34 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 obj.reviewed_at = timezone.now()
                 super().save_model(request, obj, form, change)
 
-            elif obj.status == OnboardingStatus.APPROVED:
+            elif new_status == OnboardingStatus.APPROVED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
                     raise ValueError(
-                        "Application must be Under Review before approval."
+                        f"Cannot approve from '{old.get_status_display()}'. "
+                        "Application must be Under Review first."
                     )
-                if old.provider:
+                if old.provider_id:
                     self.message_user(
                         request, "Provider account already exists.", messages.WARNING
                     )
                     super().save_model(request, obj, form, change)
-                else:
-                    password = form.cleaned_data.get("set_password") or None
-                    old.approve(reviewer, password=password)
-                    return self._show_password_page(request, old, password)
+                    return
 
-            elif obj.status == OnboardingStatus.REJECTED:
+                # Save form data first (personal info, docs) keeping status=under_review
+                # so approve() can run the FSM transition cleanly
+                obj.status = OnboardingStatus.UNDER_REVIEW
+                super().save_model(request, obj, form, change)
+                obj.refresh_from_db()
+
+                password = form.cleaned_data.get("set_password") or None
+                obj.approve(reviewer, password=password)
+                return self._show_password_page(request, obj, password)
+
+            elif new_status == OnboardingStatus.REJECTED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
                     raise ValueError(
-                        "Application must be Under Review before rejection."
+                        f"Cannot reject from '{old.get_status_display()}'. "
+                        "Application must be Under Review first."
                     )
                 obj.reviewed_by = reviewer
                 obj.rejected_at = timezone.now()
@@ -640,10 +618,11 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     )
                 super().save_model(request, obj, form, change)
 
-            elif obj.status == OnboardingStatus.CHANGES_REQUIRED:
+            elif new_status == OnboardingStatus.CHANGES_REQUIRED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
                     raise ValueError(
-                        "Application must be Under Review to request changes."
+                        f"Cannot request changes from '{old.get_status_display()}'. "
+                        "Application must be Under Review first."
                     )
                 obj.reviewed_by = reviewer
                 obj.reviewed_at = timezone.now()
@@ -655,13 +634,16 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     )
                 super().save_model(request, obj, form, change)
 
+            else:
+                super().save_model(request, obj, form, change)
+
         except ValueError as exc:
             self.message_user(request, str(exc), messages.ERROR)
             obj.status = old_status
             super().save_model(request, obj, form, change)
 
     def _show_password_page(self, request, application, password):
-        """One-time password display — shown once after approval, never stored in plaintext."""
+        """One-time password display after approval — never stored in plaintext."""
         back_url = reverse("admin:provider_provideronboarding_changelist")
         provider_url = reverse(
             "admin:provider_provider_change", args=[application.provider_id]
@@ -728,7 +710,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     "Error moving %s to review: %s", app.pk, exc, exc_info=True
                 )
                 self.message_user(request, f"Error: {exc}", messages.ERROR)
-
         if success:
             self.message_user(
                 request,
@@ -743,7 +724,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     @admin.action(description="✅ Approve — opens detail page to set password")
     def action_approve(self, request, queryset):
         eligible = [app for app in queryset if app.can_approve()]
-
         if not eligible:
             self.message_user(
                 request,
@@ -751,13 +731,11 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 messages.WARNING,
             )
             return
-
         if len(eligible) == 1:
             url = reverse(
                 "admin:provider_provideronboarding_change", args=[eligible[0].pk]
             )
             return redirect(url)
-
         self.message_user(
             request,
             f"{len(eligible)} application(s) ready. Open each individually to approve.",
@@ -778,7 +756,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             except Exception as exc:
                 logger.error("Error rejecting %s: %s", app.pk, exc, exc_info=True)
                 self.message_user(request, f"Error: {exc}", messages.ERROR)
-
         if success:
             self.message_user(
                 request, f"{success} application(s) rejected.", messages.WARNING

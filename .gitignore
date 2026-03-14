@@ -80,3 +80,7 @@ Thumbs.db
 # Database
 *.sqlite3
 *.db
+
+# Media files
+media/
+onboarding/

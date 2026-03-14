@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import UploadedFile
 from django.core.validators import (
     FileExtensionValidator,
     MinValueValidator,
@@ -22,17 +23,10 @@ phone_validator = RegexValidator(
     message="Must be a valid Egyptian mobile number (e.g., 01012345678 or +201012345678).",
 )
 
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
 class Provider(User):
-    """
-    Service provider.
-    Created via mobile registration (is_active=False),
-    activated after office verification and admin approval.
-    Documents live on ProviderOnboarding — no duplication here.
-    """
-
     objects = ProviderManager()
 
     verification_status = models.CharField(
@@ -41,8 +35,6 @@ class Provider(User):
         default=ProviderVerificationStatus.PENDING,
         db_index=True,
     )
-
-    # Service
     categories = models.ManyToManyField(
         "core.Category",
         related_name="providers",
@@ -55,13 +47,10 @@ class Provider(User):
         null=True,
         blank=True,
     )
-
-    # Business
     business_name = models.CharField(max_length=100, blank=True)
     bio = models.TextField(blank=True)
     years_of_experience = models.IntegerField(
-        default=0,
-        validators=[MinValueValidator(0)],
+        default=0, validators=[MinValueValidator(0)]
     )
     hourly_rate = models.DecimalField(
         max_digits=10,
@@ -70,8 +59,6 @@ class Provider(User):
         null=True,
         validators=[MinValueValidator(0)],
     )
-
-    # Financial
     total_earnings = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -84,16 +71,12 @@ class Provider(User):
         default=Decimal("0.00"),
         validators=[MinValueValidator(0)],
     )
-
-    # Availability
     is_available = models.BooleanField(default=True)
     service_radius = models.IntegerField(
         default=10,
         validators=[MinValueValidator(0)],
         help_text="Service radius in kilometers",
     )
-
-    # Statistics
     total_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     completed_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     average_rating = models.DecimalField(
@@ -117,8 +100,6 @@ class Provider(User):
     def __str__(self):
         return f"Provider: {self.get_full_name()}"
 
-    # ── Financial helpers ────────────────────────────────────
-
     def add_earnings(self, amount):
         if amount > 0:
             self.total_earnings += amount
@@ -131,16 +112,6 @@ class Provider(User):
             self.save(update_fields=["available_balance"])
             return True
         return False
-
-    # ── Stats helpers ────────────────────────────────────────
-
-    def increment_jobs(self):
-        self.total_jobs += 1
-        self.save(update_fields=["total_jobs"])
-
-    def increment_completed_jobs(self):
-        self.completed_jobs += 1
-        self.save(update_fields=["completed_jobs"])
 
     def get_completion_rate(self):
         if self.total_jobs == 0:
@@ -167,7 +138,6 @@ class ProviderOnboarding(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # Pre-registered provider (linked when provider registers via mobile app)
     applicant = models.OneToOneField(
         Provider,
         on_delete=models.SET_NULL,
@@ -175,23 +145,17 @@ class ProviderOnboarding(models.Model):
         blank=True,
         related_name="pending_application",
     )
-
-    # Personal
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True, db_index=True)
     phone = models.CharField(max_length=20, validators=[phone_validator])
     date_of_birth = models.DateField()
-
-    # Location
     address = models.TextField()
     region = models.ForeignKey(
         "core.Region",
         on_delete=models.PROTECT,
         related_name="onboarding_applications",
     )
-
-    # Service
     category = models.ForeignKey(
         "core.Category",
         on_delete=models.PROTECT,
@@ -203,12 +167,10 @@ class ProviderOnboarding(models.Model):
         validators=[MinValueValidator(0)],
     )
     years_of_experience = models.IntegerField(
-        default=0,
-        validators=[MinValueValidator(0)],
+        default=0, validators=[MinValueValidator(0)]
     )
     bio = models.TextField(blank=True)
 
-    # Documents — single source of truth, never copied to Provider
     nid_front = models.ImageField(
         upload_to="onboarding/nid/front/",
         validators=[FileExtensionValidator(["jpg", "jpeg", "png", "pdf"])],
@@ -234,15 +196,12 @@ class ProviderOnboarding(models.Model):
         validators=[FileExtensionValidator(["jpg", "jpeg", "png"])],
     )
 
-    # FSM
     status = models.CharField(
         max_length=max(len(c[0]) for c in OnboardingStatus.choices),
         choices=OnboardingStatus.choices,
         default=OnboardingStatus.PENDING,
         db_index=True,
     )
-
-    # Review
     reviewed_by = models.ForeignKey(
         Staff,
         on_delete=models.SET_NULL,
@@ -254,7 +213,7 @@ class ProviderOnboarding(models.Model):
     rejection_reason = models.TextField(blank=True)
     change_requests = models.TextField(blank=True)
 
-    # Result — set after approval
+    # Set after approval — links back to the activated Provider
     provider = models.OneToOneField(
         Provider,
         on_delete=models.SET_NULL,
@@ -263,7 +222,6 @@ class ProviderOnboarding(models.Model):
         related_name="onboarding_application",
     )
 
-    # Timestamps
     submitted_at = models.DateTimeField(default=timezone.now)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -303,7 +261,7 @@ class ProviderOnboarding(models.Model):
         if self.date_of_birth and self.age < 18:
             raise ValidationError({"date_of_birth": "Applicant must be 18 or older."})
 
-        # Allow if the email belongs to a pending, inactive Provider (mobile pre-registration)
+        # On create only: block duplicate emails unless it's a pending provider
         if not self.pk and User.objects.filter(email=self.email).exists():
             is_pending_provider = Provider.objects.filter(
                 email=self.email,
@@ -313,7 +271,8 @@ class ProviderOnboarding(models.Model):
             if not is_pending_provider:
                 raise ValidationError({"email": "This email is already registered."})
 
-        # File size validation
+        # File size — only validate fresh uploads, skip already-stored files
+        # to avoid FileNotFoundError on ephemeral filesystems (e.g. Railway)
         file_fields = [
             "nid_front",
             "nid_back",
@@ -323,8 +282,18 @@ class ProviderOnboarding(models.Model):
         ]
         for field_name in file_fields:
             f = getattr(self, field_name)
-            if f and hasattr(f, "size") and f.size > MAX_FILE_SIZE:
-                raise ValidationError({field_name: "File size must not exceed 5MB."})
+            if not f:
+                continue
+            raw = f.file if hasattr(f, "file") else f
+            if not isinstance(raw, UploadedFile):
+                continue
+            try:
+                if f.size > MAX_FILE_SIZE:
+                    raise ValidationError(
+                        {field_name: "File size must not exceed 5MB."}
+                    )
+            except (FileNotFoundError, OSError):
+                pass
 
     # ── FSM Guards ───────────────────────────────────────────
 
@@ -356,19 +325,18 @@ class ProviderOnboarding(models.Model):
     @transaction.atomic
     def approve(self, admin_user, password=None):
         """
-        Approve the onboarding application.
+        Approve the application and activate the provider account.
 
         Two paths:
-          1. Provider pre-registered via mobile (applicant is set) → activate + fill office data.
-          2. Walk-in (no applicant) → create Provider from scratch (password required).
+          1. Pre-registered (applicant is set) → activate existing Provider.
+          2. Walk-in (no applicant) → create new Provider (password required).
 
-        Documents stay on ProviderOnboarding as the single source of truth.
-        Access via: provider.onboarding_application.nid_front etc.
+        Caller (save_model) must save form data first and refresh_from_db
+        before calling this so self reflects the latest DB state.
         """
         if not self.can_approve():
             raise ValueError(f"Cannot approve from '{self.status}'.")
 
-        # Use linked applicant if present, otherwise fall back to email lookup
         existing_user = (
             self.applicant
             if self.applicant_id
@@ -381,7 +349,7 @@ class ProviderOnboarding(models.Model):
                     f"'{self.email}' exists but is not a provider account."
                 )
 
-            provider = existing_user.provider  # type: ignore
+            provider = existing_user.provider
             provider.is_active = True
             provider.is_verified = True
             provider.verification_status = ProviderVerificationStatus.VERIFIED
@@ -393,7 +361,21 @@ class ProviderOnboarding(models.Model):
             provider.hourly_rate = self.hourly_rate
             provider.years_of_experience = self.years_of_experience
             provider.bio = self.bio
-            provider.save()
+            provider.save(
+                update_fields=[
+                    "is_active",
+                    "is_verified",
+                    "verification_status",
+                    "first_name",
+                    "last_name",
+                    "phone",
+                    "address",
+                    "region",
+                    "hourly_rate",
+                    "years_of_experience",
+                    "bio",
+                ]
+            )
             provider.categories.add(self.category)
 
         else:
@@ -402,7 +384,7 @@ class ProviderOnboarding(models.Model):
                     "Password is required when no prior registration exists."
                 )
 
-            provider = Provider.objects.create_user(  # type: ignore
+            provider = Provider.objects.create_user(
                 email=self.email,
                 password=password,
                 first_name=self.first_name,
@@ -419,11 +401,12 @@ class ProviderOnboarding(models.Model):
             )
             provider.categories.add(self.category)
 
+        # Save only FSM/audit fields — form data was already saved by save_model
         self.provider = provider
         self.status = OnboardingStatus.APPROVED
         self.reviewed_by = admin_user
         self.approved_at = timezone.now()
-        self.save()
+        self.save(update_fields=["provider", "status", "reviewed_by", "approved_at"])
 
         return provider
 
