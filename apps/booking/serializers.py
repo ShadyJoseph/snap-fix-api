@@ -23,7 +23,7 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
             "preferred_time",
             "estimated_price",
         ]
-        read_only_fields = ["id", "status"]  # status is read-only on create
+        read_only_fields = ["id", "status"]
 
     def create(self, validated_data):
         validated_data["customer"] = self.context["request"].user.customer
@@ -61,12 +61,14 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             "cancelled_by",
             "cancelled_by_display",
             "cancellation_reason",
+            "decline_reason",
             "created_at",
             "assigned_at",
             "confirmed_at",
             "started_at",
             "completed_at",
             "cancelled_at",
+            "declined_at",
         ]
 
 
@@ -79,6 +81,12 @@ class ServiceRequestCompleteSerializer(serializers.Serializer):
 
 
 class ServiceRequestCancelSerializer(serializers.Serializer):
-    """Customer or provider cancels with a reason."""
+    """Customer or provider cancels with an optional reason."""
+
+    reason = serializers.CharField(required=False, allow_blank=True)
+
+
+class ServiceRequestDeclineSerializer(serializers.Serializer):
+    """Provider declines with an optional reason."""
 
     reason = serializers.CharField(required=False, allow_blank=True)
