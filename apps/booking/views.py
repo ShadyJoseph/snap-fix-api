@@ -2,7 +2,7 @@ import logging
 
 from django.http import Http404
 from rest_framework import generics, permissions
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -37,13 +37,25 @@ def fsm_transition(transition_fn):
         raise ValidationError(str(e)) from e
 
 
+def get_customer_or_403(user):
+    if not hasattr(user, "customer"):
+        raise PermissionDenied("Only customers can access this endpoint.")
+    return user.customer
+
+
+def get_provider_or_403(user):
+    if not hasattr(user, "provider"):
+        raise PermissionDenied("Only providers can access this endpoint.")
+    return user.provider
+
+
 # ── Customer Views ───────────────────────────────────────────
 
 
 class CustomerRequestListCreateView(generics.ListCreateAPIView):
     """
     GET  /api/v1/bookings/requests/   — customer's own requests
-    POST /api/v1/bookings/requests/   — create a new request
+    POST /api/v1/bookings/requests/   — create a new request (customers only)
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -54,11 +66,16 @@ class CustomerRequestListCreateView(generics.ListCreateAPIView):
         return ServiceRequestSerializer
 
     def get_queryset(self):
+        customer = get_customer_or_403(self.request.user)
         return (
-            ServiceRequest.objects.filter(customer=self.request.user.customer)
+            ServiceRequest.objects.filter(customer=customer)
             .select_related("category", "region", "provider")
             .order_by("-created_at")
         )
+
+    def perform_create(self, serializer):
+        customer = get_customer_or_403(self.request.user)
+        serializer.save(customer=customer)
 
 
 class CustomerRequestDetailView(generics.RetrieveAPIView):
@@ -70,23 +87,24 @@ class CustomerRequestDetailView(generics.RetrieveAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return ServiceRequest.objects.filter(
-            customer=self.request.user.customer
-        ).select_related("category", "region", "provider")
+        customer = get_customer_or_403(self.request.user)
+        return ServiceRequest.objects.filter(customer=customer).select_related(
+            "category", "region", "provider"
+        )
 
 
 class CustomerCancelView(APIView):
     """
     POST /api/v1/bookings/requests/{id}/cancel/
-    Customer can cancel any non-terminal request.
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        customer = get_customer_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(customer=request.user.customer),
+            ServiceRequest.objects.filter(customer=customer),
         )
         serializer = ServiceRequestCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -101,7 +119,7 @@ class CustomerCancelView(APIView):
         return Response(ServiceRequestSerializer(sr).data)
 
 
-# ── Provider Views ───────────────────────────────────────────
+# ── Provider Views ────────────────────────────────────────────
 
 
 class ProviderIncomingRequestsView(generics.ListAPIView):
@@ -114,10 +132,10 @@ class ProviderIncomingRequestsView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        provider = get_provider_or_403(self.request.user)
         return (
             ServiceRequest.objects.filter(
-                provider=self.request.user.provider,
-                status=ServiceRequestStatus.ASSIGNED,
+                provider=provider, status=ServiceRequestStatus.ASSIGNED
             )
             .select_related("category", "region", "customer")
             .order_by("-assigned_at")
@@ -134,8 +152,9 @@ class ProviderRequestListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        provider = get_provider_or_403(self.request.user)
         return (
-            ServiceRequest.objects.filter(provider=self.request.user.provider)
+            ServiceRequest.objects.filter(provider=provider)
             .select_related("category", "region", "customer")
             .order_by("-created_at")
         )
@@ -150,9 +169,10 @@ class ProviderAcceptView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=request.user.provider),
+            ServiceRequest.objects.filter(provider=provider),
         )
         fsm_transition(sr.confirm)
         return Response(ServiceRequestSerializer(sr).data)
@@ -167,9 +187,10 @@ class ProviderDeclineView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=request.user.provider),
+            ServiceRequest.objects.filter(provider=provider),
         )
         serializer = ServiceRequestDeclineSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -192,9 +213,10 @@ class ProviderStartView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=request.user.provider),
+            ServiceRequest.objects.filter(provider=provider),
         )
         fsm_transition(sr.start)
         return Response(ServiceRequestSerializer(sr).data)
@@ -209,9 +231,10 @@ class ProviderCompleteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=request.user.provider),
+            ServiceRequest.objects.filter(provider=provider),
         )
         serializer = ServiceRequestCompleteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -234,9 +257,10 @@ class ProviderCancelView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
+        provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=request.user.provider),
+            ServiceRequest.objects.filter(provider=provider),
         )
         serializer = ServiceRequestCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

@@ -6,6 +6,7 @@ from apps.booking.choices import CancelledBy, ServiceRequestStatus
 from apps.booking.models import ServiceRequest
 from apps.core.models import Category, Region
 from apps.customer.models import Customer
+from apps.provider.choices import ProviderVerificationStatus
 from apps.provider.models import Provider
 
 TEST_PASSWORD = "testpass123"  # noqa: S105
@@ -27,8 +28,6 @@ def create_customer(**kwargs):
 
 
 def create_provider(**kwargs):
-    from apps.provider.choices import ProviderVerificationStatus
-
     defaults = {
         "email": "provider@test.com",
         "first_name": "Test",
@@ -58,8 +57,6 @@ def create_service_request(customer, category, region, **kwargs):
         "title": "Fix leaking pipe",
         "description": "Pipe under sink is leaking",
         "address": "123 Test St",
-        "latitude": "30.044420",
-        "longitude": "31.235712",
         "preferred_date": "2026-06-01",
         "preferred_time": "10:00:00",
         "is_urgent": False,
@@ -87,13 +84,11 @@ class BookingTestCase(APITestCase):
         self.client.force_authenticate(user=self.provider)
 
     def make_request(self, **kwargs):
-        """Shortcut: create a service request owned by self.customer."""
         return create_service_request(
             self.customer, self.category, self.region, **kwargs
         )
 
     def assign_to_provider(self, sr, provider=None):
-        """Put a request into ASSIGNED state for the given provider."""
         provider = provider or self.provider
         sr.provider = provider
         sr.status = ServiceRequestStatus.ASSIGNED
@@ -101,7 +96,6 @@ class BookingTestCase(APITestCase):
         return sr
 
     def set_status(self, sr, new_status, provider=None):
-        """Force a request to any status (used to set up test preconditions)."""
         sr.status = new_status
         if provider:
             sr.provider = provider
@@ -109,7 +103,6 @@ class BookingTestCase(APITestCase):
         return sr
 
     def get_results(self, response):
-        """Unwrap paginated or plain list responses."""
         data = response.data
         return data.get("results", data) if isinstance(data, dict) else data
 
@@ -120,45 +113,39 @@ class BookingTestCase(APITestCase):
 class CustomerRequestListCreateTests(BookingTestCase):
     url = reverse("request-list-create")
 
-    # ── create ──
+    def _valid_payload(self, **overrides):
+        payload = {
+            "category": self.category.id,
+            "region": self.region.id,
+            "address": "123 Test St",
+            "title": "Fix leaking pipe",
+            "description": "Pipe under sink is leaking",
+            "preferred_date": "2026-06-01",
+            "preferred_time": "10:00:00",
+        }
+        payload.update(overrides)
+        return payload
 
     def test_create_success_returns_pending(self):
         self.authenticate_customer()
-        response = self.client.post(
-            self.url,
-            {
-                "category": self.category.id,
-                "region": self.region.id,
-                "address": "123 Test St",
-                "title": "Fix leaking pipe",
-                "description": "Pipe under sink is leaking",
-                "preferred_date": "2026-06-01",
-                "preferred_time": "10:00:00",
-            },
-        )
+        response = self.client.post(self.url, self._valid_payload())
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["status"], ServiceRequestStatus.PENDING)
         self.assertIn("id", response.data)
 
     def test_create_assigns_customer_from_token(self):
-        """The customer on the created request must come from the auth token,
-        never from the request body."""
+        """Customer must come from the auth token, never from the request body."""
         self.authenticate_customer()
-        response = self.client.post(
-            self.url,
-            {
-                "category": self.category.id,
-                "region": self.region.id,
-                "address": "123 Test St",
-                "title": "Fix leaking pipe",
-                "description": "Pipe under sink is leaking",
-                "preferred_date": "2026-06-01",
-                "preferred_time": "10:00:00",
-            },
-        )
+        response = self.client.post(self.url, self._valid_payload())
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         sr = ServiceRequest.objects.get(id=response.data["id"])
         self.assertEqual(sr.customer, self.customer)
+
+    def test_create_by_provider_returns_403(self):
+        """Providers must not be able to create service requests."""
+        self.authenticate_provider()
+        response = self.client.post(self.url, self._valid_payload())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_create_unauthenticated_returns_401(self):
         response = self.client.post(self.url, {})
@@ -169,17 +156,19 @@ class CustomerRequestListCreateTests(BookingTestCase):
         response = self.client.post(self.url, {"title": "Incomplete"})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    # ── list ──
-
     def test_list_returns_only_own_requests(self):
         self.authenticate_customer()
         other = create_customer(email="other@test.com")
         self.make_request()
         create_service_request(other, self.category, self.region)
-
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(self.get_results(response)), 1)
+
+    def test_list_by_provider_returns_403(self):
+        self.authenticate_provider()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_list_unauthenticated_returns_401(self):
         response = self.client.get(self.url)
@@ -209,6 +198,12 @@ class CustomerRequestDetailTests(BookingTestCase):
         self.authenticate_customer()
         response = self.client.get(reverse("request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_get_by_provider_returns_403(self):
+        sr = self.make_request()
+        self.authenticate_provider()
+        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_get_unauthenticated_returns_401(self):
         sr = self.make_request()
@@ -262,6 +257,12 @@ class CustomerCancelTests(BookingTestCase):
         response = self.client.post(self._cancel_url(sr), {})
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_cancel_by_provider_returns_403(self):
+        sr = self.make_request()
+        self.authenticate_provider()
+        response = self.client.post(self._cancel_url(sr), {})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 # ── Provider: Incoming ────────────────────────────────────────────────────────
 
@@ -272,21 +273,31 @@ class ProviderIncomingTests(BookingTestCase):
     def test_returns_only_assigned_requests_for_this_provider(self):
         self.authenticate_provider()
         assigned = self.assign_to_provider(self.make_request())
+
         # same provider, different status — should NOT appear
         in_progress = self.make_request(title="In Progress Job")
         self.set_status(
             in_progress, ServiceRequestStatus.IN_PROGRESS, provider=self.provider
         )
+
         # different provider — should NOT appear
         other_provider = create_provider(email="other@provider.com")
-        other_sr = self.make_request(title="Other Provider Job")
-        self.assign_to_provider(other_sr, provider=other_provider)
+        other_sr = self.assign_to_provider(
+            self.make_request(title="Other Provider Job"), provider=other_provider
+        )
 
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         results = self.get_results(response)
         self.assertEqual(len(results), 1)
         self.assertEqual(str(results[0]["id"]), str(assigned.id))
+        # ensure other_sr is referenced to avoid unused variable warning
+        self.assertNotEqual(str(results[0]["id"]), str(other_sr.id))
+
+    def test_customer_cannot_access_incoming(self):
+        self.authenticate_customer()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_unauthenticated_returns_401(self):
         response = self.client.get(self.url)
@@ -309,13 +320,16 @@ class ProviderMyJobsTests(BookingTestCase):
         self.set_status(
             completed, ServiceRequestStatus.COMPLETED, provider=self.provider
         )
-        # unrelated request — should NOT appear
-        self.make_request(title="Unassigned")
+        self.make_request(title="Unassigned")  # should NOT appear
 
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        results = self.get_results(response)
-        self.assertEqual(len(results), 2)
+        self.assertEqual(len(self.get_results(response)), 2)
+
+    def test_customer_cannot_access_my_jobs(self):
+        self.authenticate_customer()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_unauthenticated_returns_401(self):
         response = self.client.get(self.url)
@@ -352,6 +366,12 @@ class ProviderAcceptTests(BookingTestCase):
         sr = self.assign_to_provider(self.make_request(), provider=other_provider)
         response = self.client.post(self._accept_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_customer_cannot_accept(self):
+        sr = self.assign_to_provider(self.make_request())
+        self.authenticate_customer()
+        response = self.client.post(self._accept_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 # ── Provider: Decline ─────────────────────────────────────────────────────────
@@ -517,7 +537,7 @@ class ProviderCancelTests(BookingTestCase):
 
 class FullLifecycleRegressionTest(BookingTestCase):
     """
-    Walks a single request through every valid state in order.
+    Walks a request through every valid state.
     Guards against regressions that break the happy path.
 
         pending → assigned → confirmed → in_progress → completed
@@ -540,11 +560,10 @@ class FullLifecycleRegressionTest(BookingTestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         sr_id = response.data["id"]
-
         sr = ServiceRequest.objects.get(id=sr_id)
         self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
 
-        # 2. Admin assigns provider (direct model call — no admin API tested here)
+        # 2. Admin assigns provider (direct model call)
         sr.assign(self.provider)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
@@ -588,7 +607,6 @@ class FullLifecycleRegressionTest(BookingTestCase):
 class DeclineAndReassignRegressionTest(BookingTestCase):
     """
     Provider declines → request returns to pending → can be reassigned.
-    Guards against the decline flow breaking reassignment.
     """
 
     def test_decline_then_reassign_and_complete(self):
@@ -664,12 +682,10 @@ class InvalidTransitionRegressionTest(BookingTestCase):
         response = self.client.post(reverse("request-accept", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_cannot_cancel_declined_request(self):
-        """DECLINED is terminal — no further transitions."""
+    def test_cannot_cancel_completed_request(self):
+        """COMPLETED is terminal — customer cannot cancel."""
         self.authenticate_customer()
         sr = self.make_request()
-        # Force to declined state directly
-        sr.status = ServiceRequestStatus.DECLINED
-        sr.save()
+        self.set_status(sr, ServiceRequestStatus.COMPLETED)
         response = self.client.post(reverse("request-cancel", args=[sr.id]), {})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

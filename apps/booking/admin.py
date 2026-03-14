@@ -12,8 +12,6 @@ logger = logging.getLogger(__name__)
 
 @admin.register(ServiceRequest)
 class ServiceRequestAdmin(admin.ModelAdmin):
-    """Admin interface for ServiceRequest with FSM workflow."""
-
     list_display = (
         "short_id",
         "customer_name",
@@ -44,8 +42,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "provider__first_name",
         "provider__last_name",
     )
-    # customer/provider are MTI models — raw_id_fields avoids autocomplete
-    # resolution issues with inherited tables.
+    # MTI models — raw_id_fields avoids autocomplete resolution issues
     raw_id_fields = ("customer", "provider")
     autocomplete_fields = ("category", "region")
     readonly_fields = (
@@ -62,11 +59,21 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "provider_link",
         "cancellation_info",
     )
-    add_fieldsets = (
+    actions = [
+        "action_confirm",
+        "action_start",
+        "action_complete",
+        "action_cancel_by_admin",
+    ]
+
+    # ── Fieldsets ─────────────────────────────────────────────
+
+    _add_fieldsets = (
         (
             "Parties",
             {
                 "fields": ("customer", "provider"),
+                "description": "Selecting a provider here will immediately assign them.",
             },
         ),
         (
@@ -101,7 +108,64 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             },
         ),
     )
-    fieldsets = (
+
+    # Pending requests — provider is editable so admin can assign
+    _pending_fieldsets = (
+        (
+            "Status",
+            {
+                "fields": ("id", "status", "customer_link"),
+            },
+        ),
+        (
+            "Assign Provider",
+            {
+                "fields": ("provider",),
+                "description": "Select a provider to assign this request. Status will move to Assigned.",
+            },
+        ),
+        (
+            "Request Details",
+            {
+                "fields": ("title", "description", "category", "is_urgent"),
+            },
+        ),
+        (
+            "Location & Scheduling",
+            {
+                "fields": (
+                    "region",
+                    "address",
+                    "latitude",
+                    "longitude",
+                    "preferred_date",
+                    "preferred_time",
+                ),
+            },
+        ),
+        (
+            "Pricing",
+            {
+                "fields": ("estimated_price", "final_price"),
+            },
+        ),
+        (
+            "Admin Notes",
+            {
+                "fields": ("admin_notes",),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
+
+    # Non-pending requests — provider is readonly, shown as a link
+    _change_fieldsets = (
         (
             "Status",
             {
@@ -162,26 +226,21 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             },
         ),
     )
-    actions = [
-        "action_confirm",
-        "action_start",
-        "action_complete",
-        "action_cancel_by_admin",
-    ]
 
     def get_fieldsets(self, request, obj=None):
-        """Use add_fieldsets on create, fieldsets on edit."""
         if obj is None:
-            return self.add_fieldsets
-        return self.fieldsets
+            return self._add_fieldsets
+        if obj.status == ServiceRequestStatus.PENDING:
+            return self._pending_fieldsets
+        return self._change_fieldsets
 
     def get_readonly_fields(self, request, obj=None):
-        """Make provider readonly if not PENDING to prevent inconsistencies."""
+        # Provider editable only on PENDING — locked after assignment
         if obj and obj.status != ServiceRequestStatus.PENDING:
             return self.readonly_fields + ("provider",)
         return self.readonly_fields
 
-    # Display helpers
+    # ── Display helpers ───────────────────────────────────────
 
     @admin.display(description="ID")
     def short_id(self, obj):
@@ -246,7 +305,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             obj.cancellation_reason or "—",
         )
 
-    # Query optimisation
+    # ── Query optimisation ────────────────────────────────────
 
     def get_queryset(self, request):
         return (
@@ -255,34 +314,61 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             .select_related("customer", "provider", "category", "region")
         )
 
-    # Admin actions
+    # ── Save — provider assignment via FSM ────────────────────
+
+    def save_model(self, request, obj, form, change):
+        """
+        If a provider is selected on a PENDING request:
+          1. Save the request without the provider first.
+          2. Run FSM assign() which sets status=assigned, timestamps, counters.
+        This avoids a double save and keeps the FSM as the single source of truth.
+        """
+        is_pending_with_provider = (
+            obj.status == ServiceRequestStatus.PENDING and obj.provider_id
+        )
+
+        if is_pending_with_provider:
+            provider = obj.provider
+            obj.provider = None
+            super().save_model(request, obj, form, change)
+            try:
+                obj.assign(provider)
+                self.message_user(
+                    request,
+                    f"Provider {provider.get_full_name()} assigned successfully.",
+                    messages.SUCCESS,
+                )
+            except Exception as exc:
+                logger.error("Assignment failed for %s: %s", obj.pk, exc, exc_info=True)
+                self.message_user(request, str(exc), messages.ERROR)
+        else:
+            super().save_model(request, obj, form, change)
+
+    # ── Bulk actions ──────────────────────────────────────────
 
     def _run_transition(
         self, request, queryset, transition_fn, past_tense, allowed_statuses
     ):
-        """Generic FSM transition runner for bulk actions."""
-        success_count = skip_count = 0
+        success = skip = 0
         for obj in queryset:
             if obj.status not in allowed_statuses:
-                skip_count += 1
+                skip += 1
                 continue
             try:
                 transition_fn(obj)
-                success_count += 1
+                success += 1
             except Exception as exc:
                 logger.error("Transition failed for %s: %s", obj.pk, exc, exc_info=True)
                 self.message_user(
                     request, f"Error on #{str(obj.pk)[:8]}: {exc}", messages.ERROR
                 )
-        if success_count:
+        if success:
             self.message_user(
-                request, f"{success_count} request(s) {past_tense}.", messages.SUCCESS
+                request, f"{success} request(s) {past_tense}.", messages.SUCCESS
             )
-        if skip_count:
+        if skip:
             self.message_user(
-                request,
-                f"{skip_count} request(s) skipped (wrong status).",
-                messages.WARNING,
+                request, f"{skip} request(s) skipped (wrong status).", messages.WARNING
             )
 
     @admin.action(description="Mark as Confirmed")
@@ -331,23 +417,3 @@ class ServiceRequestAdmin(admin.ModelAdmin):
                 ServiceRequestStatus.IN_PROGRESS,
             ],
         )
-
-    # Save model — handles provider assignment via FSM
-
-    def save_model(self, request, obj, form, change):
-        """
-        Handles provider assignment via FSM on both create and change.
-        Saves the model normally, then if provider is set and status is PENDING,
-        routes through FSM assign() to update status, timestamps, and counters.
-        """
-        super().save_model(request, obj, form, change)
-        if obj.status == ServiceRequestStatus.PENDING and obj.provider_id:
-            try:
-                obj.assign(obj.provider)
-                self.message_user(
-                    request,
-                    f"Provider {obj.provider.get_full_name()} assigned successfully.",
-                    messages.SUCCESS,
-                )
-            except Exception as exc:
-                self.message_user(request, str(exc), messages.ERROR)
