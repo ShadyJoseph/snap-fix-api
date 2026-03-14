@@ -235,13 +235,11 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # FK points to Staff — restrict + disable related buttons
         self.fields["reviewed_by"].queryset = Staff.objects.filter(is_active=True)
         self.fields["reviewed_by"].widget.can_add_related = False
         self.fields["reviewed_by"].widget.can_change_related = False
         self.fields["reviewed_by"].widget.can_delete_related = False
 
-        # Limit applicant to pending, inactive providers only
         self.fields["applicant"].queryset = Provider.objects.filter(
             is_active=False,
             verification_status=ProviderVerificationStatus.PENDING,
@@ -250,7 +248,6 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         self.fields["applicant"].widget.can_add_related = False
         self.fields["applicant"].widget.can_change_related = False
 
-        # Prefill personal fields from linked applicant
         instance = kwargs.get("instance")
         if instance and instance.applicant_id:
             applicant = instance.applicant
@@ -306,6 +303,170 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 # Onboarding Admin
 # ─────────────────────────────────────────────────────────────
 
+# Fieldsets used on the CHANGE page (existing record) — includes provider_link
+_CHANGE_FIELDSETS = (
+    (
+        "Application Status",
+        {
+            "fields": ("status", "provider_link"),
+        },
+    ),
+    (
+        "Pre-Registered Provider",
+        {
+            "fields": ("applicant",),
+            "description": (
+                "Select the provider who pre-registered via the mobile app. "
+                "Their basic info will be prefilled below and can be edited before saving."
+            ),
+        },
+    ),
+    (
+        "Set Password — walk-ins only",
+        {
+            "fields": ("set_password", "confirm_password"),
+            "description": "Leave blank if the provider registered via the app.",
+        },
+    ),
+    (
+        "Personal Information",
+        {
+            "fields": (
+                "first_name",
+                "last_name",
+                "email",
+                "phone",
+                "date_of_birth",
+                "age",
+                "profile_photo",
+            ),
+        },
+    ),
+    (
+        "Location & Service",
+        {
+            "fields": ("address", "region", "category"),
+        },
+    ),
+    (
+        "Professional Details",
+        {
+            "fields": ("hourly_rate", "years_of_experience", "bio"),
+        },
+    ),
+    (
+        "Documents",
+        {
+            "fields": (
+                "document_preview",
+                "nid_front",
+                "nid_back",
+                "police_clearance_certificate",
+                "professional_certificate",
+            ),
+        },
+    ),
+    (
+        "Admin Review",
+        {
+            "fields": (
+                "reviewed_by",
+                "admin_notes",
+                "rejection_reason",
+                "change_requests",
+            ),
+        },
+    ),
+    (
+        "Timestamps",
+        {
+            "fields": (
+                "id",
+                "submitted_at",
+                "reviewed_at",
+                "approved_at",
+                "rejected_at",
+                "updated_at",
+            ),
+            "classes": ("collapse",),
+        },
+    ),
+)
+
+# Fieldsets used on the ADD page — no provider_link, no document_preview
+_ADD_FIELDSETS = (
+    (
+        "Application Status",
+        {
+            "fields": ("status",),
+        },
+    ),
+    (
+        "Pre-Registered Provider",
+        {
+            "fields": ("applicant",),
+            "description": (
+                "Select the provider who pre-registered via the mobile app. "
+                "Their basic info will be prefilled below and can be edited before saving."
+            ),
+        },
+    ),
+    (
+        "Set Password — walk-ins only",
+        {
+            "fields": ("set_password", "confirm_password"),
+            "description": "Leave blank if the provider registered via the app.",
+        },
+    ),
+    (
+        "Personal Information",
+        {
+            "fields": (
+                "first_name",
+                "last_name",
+                "email",
+                "phone",
+                "date_of_birth",
+                "profile_photo",
+            ),
+        },
+    ),
+    (
+        "Location & Service",
+        {
+            "fields": ("address", "region", "category"),
+        },
+    ),
+    (
+        "Professional Details",
+        {
+            "fields": ("hourly_rate", "years_of_experience", "bio"),
+        },
+    ),
+    (
+        "Documents",
+        {
+            "fields": (
+                "nid_front",
+                "nid_back",
+                "police_clearance_certificate",
+                "professional_certificate",
+            ),
+        },
+    ),
+    (
+        "Admin Review",
+        {
+            "fields": (
+                "reviewed_by",
+                "admin_notes",
+                "rejection_reason",
+                "change_requests",
+            ),
+        },
+    ),
+)
+
 
 @admin.register(ProviderOnboarding)
 class ProviderOnboardingAdmin(admin.ModelAdmin):
@@ -324,107 +485,33 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "category", "region", "submitted_at")
     search_fields = ("first_name", "last_name", "email", "phone")
-    readonly_fields = (
-        "id",
-        "age",
-        "provider_link",
-        "document_preview",
-        "submitted_at",
-        "reviewed_at",
-        "approved_at",
-        "rejected_at",
-        "updated_at",
-    )
     actions = ["action_move_to_review", "action_approve", "action_reject"]
 
-    fieldsets = (
-        (
-            "Application Status",
-            {
-                "fields": ("status", "provider_link"),
-            },
-        ),
-        (
-            "Pre-Registered Provider",
-            {
-                "fields": ("applicant",),
-                "description": (
-                    "Select the provider who pre-registered via the mobile app. "
-                    "Their basic info will be prefilled below and can be edited before saving."
-                ),
-            },
-        ),
-        (
-            "Set Password — walk-ins only",
-            {
-                "fields": ("set_password", "confirm_password"),
-                "description": "Leave blank if the provider registered via the app.",
-            },
-        ),
-        (
-            "Personal Information",
-            {
-                "fields": (
-                    "first_name",
-                    "last_name",
-                    "email",
-                    "phone",
-                    "date_of_birth",
-                    "age",
-                    "profile_photo",
-                ),
-            },
-        ),
-        (
-            "Location & Service",
-            {
-                "fields": ("address", "region", "category"),
-            },
-        ),
-        (
-            "Professional Details",
-            {
-                "fields": ("hourly_rate", "years_of_experience", "bio"),
-            },
-        ),
-        (
-            "Documents",
-            {
-                "fields": (
-                    "document_preview",
-                    "nid_front",
-                    "nid_back",
-                    "police_clearance_certificate",
-                    "professional_certificate",
-                ),
-            },
-        ),
-        (
-            "Admin Review",
-            {
-                "fields": (
-                    "reviewed_by",
-                    "admin_notes",
-                    "rejection_reason",
-                    "change_requests",
-                ),
-            },
-        ),
-        (
-            "Timestamps",
-            {
-                "fields": (
-                    "id",
-                    "submitted_at",
-                    "reviewed_at",
-                    "approved_at",
-                    "rejected_at",
-                    "updated_at",
-                ),
-                "classes": ("collapse",),
-            },
-        ),
-    )
+    # readonly_fields is intentionally absent here — managed via get_readonly_fields
+
+    def get_readonly_fields(self, request, obj=None):
+        # Base fields that are always read-only
+        readonly = [
+            "id",
+            "age",
+            "submitted_at",
+            "reviewed_at",
+            "approved_at",
+            "rejected_at",
+            "updated_at",
+        ]
+        if obj is not None:
+            # These are callable display methods — only valid on existing records
+            readonly += ["provider_link", "document_preview"]
+        return readonly
+
+    def get_fieldsets(self, request, obj=None):
+        # Use the add fieldsets when creating a new record (obj is None)
+        # to avoid referencing provider_link / document_preview / age
+        # which don't exist on unsaved instances
+        if obj is None:
+            return _ADD_FIELDSETS
+        return _CHANGE_FIELDSETS
 
     def get_queryset(self, request):
         return (
@@ -465,8 +552,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
     @admin.display(description="Provider Account")
     def provider_link(self, obj):
-        if not obj.pk:
-            return "—"
         if obj.provider_id:
             url = reverse("admin:provider_provider_change", args=[obj.provider_id])
             return format_html(
@@ -521,11 +606,10 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 '<span style="color:#999">No documents uploaded yet.</span>'
             )
 
-        wrapper = format_html(
+        return format_html(
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">{}</div>',
             mark_safe("".join(parts)),  # noqa: S308
         )
-        return wrapper
 
     # ── Save with FSM enforcement ────────────────────────────
 
