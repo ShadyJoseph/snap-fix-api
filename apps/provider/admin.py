@@ -19,6 +19,22 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATUSES = (OnboardingStatus.APPROVED, OnboardingStatus.REJECTED)
 
 
+# ── Helper ────────────────────────────────────────────────────────────────────
+
+
+def get_reviewer(request_user):
+    """
+    Return a Staff instance to use as reviewed_by.
+
+    - If the user IS a Staff instance, return it directly.
+    - If the user is a superuser (but not Staff), return None —
+      the field is nullable so this is safe and avoids a FK type error.
+    """
+    if isinstance(request_user, Staff):
+        return request_user
+    return None
+
+
 # ─────────────────────────────────────────────────────────────
 # Provider Admin
 # ─────────────────────────────────────────────────────────────
@@ -196,30 +212,24 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
     class Meta:
         model = ProviderOnboarding
         fields = [
-            # Linking
             "applicant",
             "status",
-            # Personal
             "first_name",
             "last_name",
             "email",
             "phone",
             "date_of_birth",
             "profile_photo",
-            # Location & Service
             "address",
             "region",
             "category",
-            # Professional
             "hourly_rate",
             "years_of_experience",
             "bio",
-            # Documents
             "nid_front",
             "nid_back",
             "police_clearance_certificate",
             "professional_certificate",
-            # Review
             "reviewed_by",
             "admin_notes",
             "rejection_reason",
@@ -236,6 +246,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         self.fields["reviewed_by"].queryset = Staff.objects.filter(is_active=True)
+        self.fields["reviewed_by"].required = False
         self.fields["reviewed_by"].widget.can_add_related = False
         self.fields["reviewed_by"].widget.can_change_related = False
         self.fields["reviewed_by"].widget.can_delete_related = False
@@ -273,11 +284,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         if status == OnboardingStatus.APPROVED and not already_approved:
             email = self.instance.email if self.instance else cleaned.get("email")
             has_preregistration = (
-                applicant
-                or User.objects.filter(
-                    email=email,
-                    is_active=False,
-                ).exists()
+                applicant or User.objects.filter(email=email, is_active=False).exists()
             )
 
             if not has_preregistration:
@@ -300,10 +307,9 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 
 
 # ─────────────────────────────────────────────────────────────
-# Onboarding Admin
+# Onboarding Admin — shared fieldset fragments
 # ─────────────────────────────────────────────────────────────
 
-# Shared fieldset sections — no callable-only fields here
 _FIELDSET_PRE_REGISTERED = (
     "Pre-Registered Provider",
     {
@@ -361,11 +367,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     search_fields = ("first_name", "last_name", "email", "phone")
     actions = ["action_move_to_review", "action_approve", "action_reject"]
 
-    # readonly_fields is intentionally absent — managed entirely via get_readonly_fields
-    # so that callable-only fields (provider_link, document_preview, age) are only
-    # registered as readonly when they are also present in the fieldsets (change page).
-    # Django requires a field to be in readonly_fields to resolve it as a callable
-    # in fieldsets — if it's in fieldsets but NOT in readonly_fields it crashes.
+    # readonly_fields managed via get_readonly_fields — see comment there.
 
     def get_readonly_fields(self, request, obj=None):
         readonly = [
@@ -377,14 +379,14 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             "updated_at",
         ]
         if obj is not None:
-            # age, provider_link, document_preview are callables/properties —
-            # only added when we're on the change page where they appear in fieldsets
+            # Callables / properties only valid on existing records —
+            # must be in readonly_fields at the same time they appear in fieldsets
+            # or Django crashes resolving them as form fields.
             readonly += ["age", "provider_link", "document_preview"]
         return readonly
 
     def get_fieldsets(self, request, obj=None):
         if obj is None:
-            # ADD page — no callables, no age (no instance to compute from)
             return (
                 ("Application Status", {"fields": ("status",)}),
                 _FIELDSET_PRE_REGISTERED,
@@ -418,11 +420,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 _FIELDSET_REVIEW,
             )
 
-        # CHANGE page — callables are safe because get_readonly_fields includes them
         return (
             (
                 "Application Status",
-                # provider_link is a callable in readonly_fields — safe on change page
                 {"fields": ("status", "provider_link")},
             ),
             _FIELDSET_PRE_REGISTERED,
@@ -436,7 +436,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         "email",
                         "phone",
                         "date_of_birth",
-                        "age",  # property — safe, in readonly_fields
+                        "age",
                         "profile_photo",
                     ),
                 },
@@ -447,7 +447,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 "Documents",
                 {
                     "fields": (
-                        "document_preview",  # callable — safe, in readonly_fields
+                        "document_preview",
                         "nid_front",
                         "nid_back",
                         "police_clearance_certificate",
@@ -556,9 +556,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             )
 
         if not parts:
-            return mark_safe(
+            return mark_safe(  # noqa: S308
                 '<span style="color:#999">No documents uploaded yet.</span>'
-            )  # noqa: S308
+            )
 
         return mark_safe(  # noqa: S308
             f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
@@ -581,7 +581,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
         old_status = old.status
 
-        # Block edits on terminal states
         if old_status in TERMINAL_STATUSES:
             self.message_user(
                 request,
@@ -592,12 +591,12 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             super().save_model(request, obj, form, change)
             return
 
-        # No status change — allow field-only updates freely
         if old_status == obj.status:
             super().save_model(request, obj, form, change)
             return
 
-        # FSM transition handlers
+        reviewer = get_reviewer(request.user)
+
         try:
             if obj.status == OnboardingStatus.UNDER_REVIEW:
                 if old_status not in (
@@ -607,7 +606,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     raise ValueError(
                         f"Cannot move to Under Review from '{old.get_status_display()}'."
                     )
-                obj.reviewed_by = request.user
+                obj.reviewed_by = reviewer
                 obj.reviewed_at = timezone.now()
                 super().save_model(request, obj, form, change)
 
@@ -623,7 +622,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     super().save_model(request, obj, form, change)
                 else:
                     password = form.cleaned_data.get("set_password") or None
-                    old.approve(request.user, password=password)
+                    old.approve(reviewer, password=password)
                     return self._show_password_page(request, old, password)
 
             elif obj.status == OnboardingStatus.REJECTED:
@@ -631,7 +630,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     raise ValueError(
                         "Application must be Under Review before rejection."
                     )
-                obj.reviewed_by = request.user
+                obj.reviewed_by = reviewer
                 obj.rejected_at = timezone.now()
                 if not obj.rejection_reason:
                     self.message_user(
@@ -646,7 +645,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     raise ValueError(
                         "Application must be Under Review to request changes."
                     )
-                obj.reviewed_by = request.user
+                obj.reviewed_by = reviewer
                 obj.reviewed_at = timezone.now()
                 if not obj.change_requests:
                     self.message_user(
@@ -715,13 +714,14 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
     @admin.action(description="Move to Under Review")
     def action_move_to_review(self, request, queryset):
+        reviewer = get_reviewer(request.user)
         success = skip = 0
         for app in queryset:
             if not app.can_review():
                 skip += 1
                 continue
             try:
-                app.move_to_review(request.user)
+                app.move_to_review(reviewer)
                 success += 1
             except Exception as exc:
                 logger.error(
@@ -766,13 +766,14 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
     @admin.action(description="Reject selected applications")
     def action_reject(self, request, queryset):
+        reviewer = get_reviewer(request.user)
         success = skip = 0
         for app in queryset:
             if not app.can_reject():
                 skip += 1
                 continue
             try:
-                app.reject(request.user, reason=app.admin_notes or "Rejected by admin.")
+                app.reject(reviewer, reason=app.admin_notes or "Rejected by admin.")
                 success += 1
             except Exception as exc:
                 logger.error("Error rejecting %s: %s", app.pk, exc, exc_info=True)

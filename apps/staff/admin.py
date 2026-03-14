@@ -1,11 +1,40 @@
 from django.contrib import admin
+from django.contrib.auth.forms import UserChangeForm, UserCreationForm
 from django.utils.html import format_html
 
 from .models import Staff
 
 
+class StaffCreationForm(UserCreationForm):
+    """Used on the add page — includes password1/password2 from UserCreationForm."""
+
+    class Meta(UserCreationForm.Meta):
+        model = Staff
+        fields = (
+            "email",
+            "first_name",
+            "last_name",
+            "phone",
+            "can_manage_users",
+            "can_manage_services",
+            "can_manage_payments",
+            "can_view_analytics",
+        )
+
+
+class StaffChangeForm(UserChangeForm):
+    """Used on the change page — no raw password fields."""
+
+    class Meta(UserChangeForm.Meta):
+        model = Staff
+        fields = "__all__"
+
+
 @admin.register(Staff)
 class StaffAdmin(admin.ModelAdmin):
+    form = StaffChangeForm
+    add_form = StaffCreationForm
+
     list_display = (
         "email",
         "first_name",
@@ -67,7 +96,7 @@ class StaffAdmin(admin.ModelAdmin):
 
     add_fieldsets = (
         (
-            None,
+            "Account",
             {
                 "classes": ("wide",),
                 "fields": (
@@ -76,6 +105,14 @@ class StaffAdmin(admin.ModelAdmin):
                     "password2",
                     "first_name",
                     "last_name",
+                    "phone",
+                ),
+            },
+        ),
+        (
+            "Permissions",
+            {
+                "fields": (
                     "can_manage_users",
                     "can_manage_services",
                     "can_manage_payments",
@@ -85,8 +122,18 @@ class StaffAdmin(admin.ModelAdmin):
         ),
     )
 
+    def get_form(self, request, obj=None, **kwargs):
+        """Use StaffCreationForm on add, StaffChangeForm on change."""
+        if obj is None:
+            kwargs["form"] = self.add_form
+        return super().get_form(request, obj, **kwargs)
+
+    def get_fieldsets(self, request, obj=None):
+        if obj is None:
+            return self.add_fieldsets
+        return self.fieldsets
+
     def save_model(self, request, obj, form, change):
-        # is_staff is also enforced in Staff.save() — double safety here
         obj.is_staff = True
         super().save_model(request, obj, form, change)
 
