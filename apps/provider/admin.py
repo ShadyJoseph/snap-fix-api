@@ -303,168 +303,42 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
 # Onboarding Admin
 # ─────────────────────────────────────────────────────────────
 
-# Fieldsets used on the CHANGE page (existing record) — includes provider_link
-_CHANGE_FIELDSETS = (
-    (
-        "Application Status",
-        {
-            "fields": ("status", "provider_link"),
-        },
-    ),
-    (
-        "Pre-Registered Provider",
-        {
-            "fields": ("applicant",),
-            "description": (
-                "Select the provider who pre-registered via the mobile app. "
-                "Their basic info will be prefilled below and can be edited before saving."
-            ),
-        },
-    ),
-    (
-        "Set Password — walk-ins only",
-        {
-            "fields": ("set_password", "confirm_password"),
-            "description": "Leave blank if the provider registered via the app.",
-        },
-    ),
-    (
-        "Personal Information",
-        {
-            "fields": (
-                "first_name",
-                "last_name",
-                "email",
-                "phone",
-                "date_of_birth",
-                "age",
-                "profile_photo",
-            ),
-        },
-    ),
-    (
-        "Location & Service",
-        {
-            "fields": ("address", "region", "category"),
-        },
-    ),
-    (
-        "Professional Details",
-        {
-            "fields": ("hourly_rate", "years_of_experience", "bio"),
-        },
-    ),
-    (
-        "Documents",
-        {
-            "fields": (
-                "document_preview",
-                "nid_front",
-                "nid_back",
-                "police_clearance_certificate",
-                "professional_certificate",
-            ),
-        },
-    ),
-    (
-        "Admin Review",
-        {
-            "fields": (
-                "reviewed_by",
-                "admin_notes",
-                "rejection_reason",
-                "change_requests",
-            ),
-        },
-    ),
-    (
-        "Timestamps",
-        {
-            "fields": (
-                "id",
-                "submitted_at",
-                "reviewed_at",
-                "approved_at",
-                "rejected_at",
-                "updated_at",
-            ),
-            "classes": ("collapse",),
-        },
-    ),
+# Shared fieldset sections — no callable-only fields here
+_FIELDSET_PRE_REGISTERED = (
+    "Pre-Registered Provider",
+    {
+        "fields": ("applicant",),
+        "description": (
+            "Select the provider who pre-registered via the mobile app. "
+            "Their basic info will be prefilled below and can be edited before saving."
+        ),
+    },
 )
-
-# Fieldsets used on the ADD page — no provider_link, no document_preview
-_ADD_FIELDSETS = (
-    (
-        "Application Status",
-        {
-            "fields": ("status",),
-        },
-    ),
-    (
-        "Pre-Registered Provider",
-        {
-            "fields": ("applicant",),
-            "description": (
-                "Select the provider who pre-registered via the mobile app. "
-                "Their basic info will be prefilled below and can be edited before saving."
-            ),
-        },
-    ),
-    (
-        "Set Password — walk-ins only",
-        {
-            "fields": ("set_password", "confirm_password"),
-            "description": "Leave blank if the provider registered via the app.",
-        },
-    ),
-    (
-        "Personal Information",
-        {
-            "fields": (
-                "first_name",
-                "last_name",
-                "email",
-                "phone",
-                "date_of_birth",
-                "profile_photo",
-            ),
-        },
-    ),
-    (
-        "Location & Service",
-        {
-            "fields": ("address", "region", "category"),
-        },
-    ),
-    (
-        "Professional Details",
-        {
-            "fields": ("hourly_rate", "years_of_experience", "bio"),
-        },
-    ),
-    (
-        "Documents",
-        {
-            "fields": (
-                "nid_front",
-                "nid_back",
-                "police_clearance_certificate",
-                "professional_certificate",
-            ),
-        },
-    ),
-    (
-        "Admin Review",
-        {
-            "fields": (
-                "reviewed_by",
-                "admin_notes",
-                "rejection_reason",
-                "change_requests",
-            ),
-        },
-    ),
+_FIELDSET_PASSWORD = (
+    "Set Password — walk-ins only",
+    {
+        "fields": ("set_password", "confirm_password"),
+        "description": "Leave blank if the provider registered via the app.",
+    },
+)
+_FIELDSET_LOCATION = (
+    "Location & Service",
+    {"fields": ("address", "region", "category")},
+)
+_FIELDSET_PROFESSIONAL = (
+    "Professional Details",
+    {"fields": ("hourly_rate", "years_of_experience", "bio")},
+)
+_FIELDSET_REVIEW = (
+    "Admin Review",
+    {
+        "fields": (
+            "reviewed_by",
+            "admin_notes",
+            "rejection_reason",
+            "change_requests",
+        ),
+    },
 )
 
 
@@ -487,13 +361,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     search_fields = ("first_name", "last_name", "email", "phone")
     actions = ["action_move_to_review", "action_approve", "action_reject"]
 
-    # readonly_fields is intentionally absent here — managed via get_readonly_fields
+    # readonly_fields is intentionally absent — managed entirely via get_readonly_fields
+    # so that callable-only fields (provider_link, document_preview, age) are only
+    # registered as readonly when they are also present in the fieldsets (change page).
+    # Django requires a field to be in readonly_fields to resolve it as a callable
+    # in fieldsets — if it's in fieldsets but NOT in readonly_fields it crashes.
 
     def get_readonly_fields(self, request, obj=None):
-        # Base fields that are always read-only
         readonly = [
             "id",
-            "age",
             "submitted_at",
             "reviewed_at",
             "approved_at",
@@ -501,17 +377,100 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             "updated_at",
         ]
         if obj is not None:
-            # These are callable display methods — only valid on existing records
-            readonly += ["provider_link", "document_preview"]
+            # age, provider_link, document_preview are callables/properties —
+            # only added when we're on the change page where they appear in fieldsets
+            readonly += ["age", "provider_link", "document_preview"]
         return readonly
 
     def get_fieldsets(self, request, obj=None):
-        # Use the add fieldsets when creating a new record (obj is None)
-        # to avoid referencing provider_link / document_preview / age
-        # which don't exist on unsaved instances
         if obj is None:
-            return _ADD_FIELDSETS
-        return _CHANGE_FIELDSETS
+            # ADD page — no callables, no age (no instance to compute from)
+            return (
+                ("Application Status", {"fields": ("status",)}),
+                _FIELDSET_PRE_REGISTERED,
+                _FIELDSET_PASSWORD,
+                (
+                    "Personal Information",
+                    {
+                        "fields": (
+                            "first_name",
+                            "last_name",
+                            "email",
+                            "phone",
+                            "date_of_birth",
+                            "profile_photo",
+                        ),
+                    },
+                ),
+                _FIELDSET_LOCATION,
+                _FIELDSET_PROFESSIONAL,
+                (
+                    "Documents",
+                    {
+                        "fields": (
+                            "nid_front",
+                            "nid_back",
+                            "police_clearance_certificate",
+                            "professional_certificate",
+                        ),
+                    },
+                ),
+                _FIELDSET_REVIEW,
+            )
+
+        # CHANGE page — callables are safe because get_readonly_fields includes them
+        return (
+            (
+                "Application Status",
+                # provider_link is a callable in readonly_fields — safe on change page
+                {"fields": ("status", "provider_link")},
+            ),
+            _FIELDSET_PRE_REGISTERED,
+            _FIELDSET_PASSWORD,
+            (
+                "Personal Information",
+                {
+                    "fields": (
+                        "first_name",
+                        "last_name",
+                        "email",
+                        "phone",
+                        "date_of_birth",
+                        "age",  # property — safe, in readonly_fields
+                        "profile_photo",
+                    ),
+                },
+            ),
+            _FIELDSET_LOCATION,
+            _FIELDSET_PROFESSIONAL,
+            (
+                "Documents",
+                {
+                    "fields": (
+                        "document_preview",  # callable — safe, in readonly_fields
+                        "nid_front",
+                        "nid_back",
+                        "police_clearance_certificate",
+                        "professional_certificate",
+                    ),
+                },
+            ),
+            _FIELDSET_REVIEW,
+            (
+                "Timestamps",
+                {
+                    "fields": (
+                        "id",
+                        "submitted_at",
+                        "reviewed_at",
+                        "approved_at",
+                        "rejected_at",
+                        "updated_at",
+                    ),
+                    "classes": ("collapse",),
+                },
+            ),
+        )
 
     def get_queryset(self, request):
         return (
@@ -554,13 +513,12 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     def provider_link(self, obj):
         if obj.provider_id:
             url = reverse("admin:provider_provider_change", args=[obj.provider_id])
-            return format_html(
-                '<a href="{}" style="color:#4CAF50;font-weight:bold;padding:6px 12px;'
-                'background:#E8F5E9;border-radius:4px;text-decoration:none">'
-                "View Provider Account</a>",
-                url,
+            return mark_safe(  # noqa: S308
+                f'<a href="{url}" style="color:#4CAF50;font-weight:bold;padding:6px 12px;'
+                f'background:#E8F5E9;border-radius:4px;text-decoration:none">'
+                f"View Provider Account</a>"
             )
-        return format_html(
+        return mark_safe(  # noqa: S308
             '<span style="color:#999;font-style:italic">Not created yet</span>'
         )
 
@@ -569,23 +527,19 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         parts = []
 
         def img_card(label, f):
-            return format_html(
-                '<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
-                '<strong style="color:#666">{}</strong><br><br>'
-                '<img src="{}" style="max-width:100%;max-height:200px;border-radius:4px">'
-                "</div>",
-                label,
-                f.url,
+            return (
+                f'<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
+                f'<strong style="color:#666">{label}</strong><br><br>'
+                f'<img src="{f.url}" style="max-width:100%;max-height:200px;border-radius:4px">'
+                f"</div>"
             )
 
         def link_card(label, f):
-            return format_html(
-                '<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
-                '<strong style="color:#666">{}</strong><br><br>'
-                '<a href="{}" target="_blank" style="color:#2196F3">View Document</a>'
-                "</div>",
-                label,
-                f.url,
+            return (
+                f'<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
+                f'<strong style="color:#666">{label}</strong><br><br>'
+                f'<a href="{f.url}" target="_blank" style="color:#2196F3">View Document</a>'
+                f"</div>"
             )
 
         if obj.nid_front:
@@ -602,13 +556,14 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             )
 
         if not parts:
-            return format_html(
+            return mark_safe(
                 '<span style="color:#999">No documents uploaded yet.</span>'
-            )
+            )  # noqa: S308
 
-        return format_html(
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">{}</div>',
-            mark_safe("".join(parts)),  # noqa: S308
+        return mark_safe(  # noqa: S308
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
+            f"{''.join(parts)}"
+            f"</div>"
         )
 
     # ── Save with FSM enforcement ────────────────────────────
