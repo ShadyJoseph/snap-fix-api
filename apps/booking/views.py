@@ -12,6 +12,7 @@ from .serializers import (
     ServiceRequestCancelSerializer,
     ServiceRequestCompleteSerializer,
     ServiceRequestCreateSerializer,
+    ServiceRequestDeclineSerializer,
     ServiceRequestSerializer,
 )
 
@@ -41,8 +42,8 @@ def fsm_transition(transition_fn):
 
 class CustomerRequestListCreateView(generics.ListCreateAPIView):
     """
-    GET  /api/v1/bookings/requests/     — customer's own requests
-    POST /api/v1/bookings/requests/     — create new request
+    GET  /api/v1/bookings/requests/   — customer's own requests
+    POST /api/v1/bookings/requests/   — create a new request
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -106,7 +107,7 @@ class CustomerCancelView(APIView):
 class ProviderIncomingRequestsView(generics.ListAPIView):
     """
     GET /api/v1/bookings/requests/incoming/
-    Requests assigned to the provider awaiting accept/decline.
+    Requests assigned to the provider — awaiting accept or decline.
     """
 
     serializer_class = ServiceRequestSerializer
@@ -143,7 +144,7 @@ class ProviderRequestListView(generics.ListAPIView):
 class ProviderAcceptView(APIView):
     """
     POST /api/v1/bookings/requests/{id}/accept/
-    Provider accepts → confirmed.
+    Provider accepts the assignment → confirmed.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -160,7 +161,7 @@ class ProviderAcceptView(APIView):
 class ProviderDeclineView(APIView):
     """
     POST /api/v1/bookings/requests/{id}/decline/
-    Provider declines → back to pending for admin to reassign.
+    Provider declines → request goes back to pending for admin to reassign.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -170,7 +171,7 @@ class ProviderDeclineView(APIView):
             pk,
             ServiceRequest.objects.filter(provider=request.user.provider),
         )
-        serializer = ServiceRequestCancelSerializer(data=request.data)
+        serializer = ServiceRequestDeclineSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         fsm_transition(
@@ -202,7 +203,7 @@ class ProviderStartView(APIView):
 class ProviderCompleteView(APIView):
     """
     POST /api/v1/bookings/requests/{id}/complete/
-    Provider completes job, optionally sets final price.
+    Provider completes the job, optionally submitting the final price.
     """
 
     permission_classes = [permissions.IsAuthenticated]

@@ -11,13 +11,15 @@ from .choices import CancelledBy, ServiceRequestStatus
 class ServiceRequest(models.Model):
     """
     Core transaction model for the platform.
+
     State Flow:
         pending -> assigned -> confirmed -> in_progress -> completed
-                                        ↘
-                        cancelled (from any non-terminal state)
+        assigned -> declined (back to pending for admin to reassign)
+        cancelled (from any non-terminal state)
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
     # --- Parties ---
     customer = models.ForeignKey(
         "customer.Customer",
@@ -31,6 +33,7 @@ class ServiceRequest(models.Model):
         blank=True,
         related_name="service_requests",
     )
+
     # --- What & Where ---
     category = models.ForeignKey(
         "core.Category",
@@ -49,6 +52,7 @@ class ServiceRequest(models.Model):
     longitude = models.DecimalField(
         max_digits=9, decimal_places=6, null=True, blank=True
     )
+
     # --- Description ---
     title = models.CharField(max_length=200)
     description = models.TextField()
@@ -56,9 +60,11 @@ class ServiceRequest(models.Model):
         default=False,
         help_text="Customer flagged this as urgent",
     )
+
     # --- Scheduling ---
     preferred_date = models.DateField()
     preferred_time = models.TimeField()
+
     # --- Pricing ---
     estimated_price = models.DecimalField(
         max_digits=10,
@@ -76,25 +82,32 @@ class ServiceRequest(models.Model):
         validators=[MinValueValidator(0)],
         help_text="Actual price after job completion",
     )
+
     # --- Status ---
     status = models.CharField(
-        max_length=20,
+        max_length=max(len(v) for v in ServiceRequestStatus.values),
         choices=ServiceRequestStatus.choices,
         default=ServiceRequestStatus.PENDING,
         db_index=True,
     )
+
     # --- Cancellation ---
     cancelled_by = models.CharField(
-        max_length=10,
+        max_length=max(len(v) for v in CancelledBy.values),
         choices=CancelledBy.choices,
         blank=True,
     )
     cancellation_reason = models.TextField(blank=True)
+
+    # --- Decline ---
+    decline_reason = models.TextField(blank=True)
+
     # --- Admin Notes ---
     admin_notes = models.TextField(
         blank=True,
         help_text="Internal notes (not visible to customer/provider)",
     )
+
     # --- Timestamps ---
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -103,6 +116,7 @@ class ServiceRequest(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
+    declined_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "service_requests"
@@ -120,7 +134,7 @@ class ServiceRequest(models.Model):
     def __str__(self):
         return f"#{str(self.id)[:8].upper()} | {self.category} | {self.get_status_display()}"
 
-    # FSM Guard Checks
+    # ── FSM Guard Checks ──────────────────────────────────────
 
     def can_assign(self):
         return self.status == ServiceRequestStatus.PENDING
@@ -138,13 +152,17 @@ class ServiceRequest(models.Model):
         return self.status not in (
             ServiceRequestStatus.COMPLETED,
             ServiceRequestStatus.CANCELLED,
+            ServiceRequestStatus.DECLINED,
         )
 
-    # FSM Transitions
+    def can_decline(self):
+        return self.status == ServiceRequestStatus.ASSIGNED
+
+    # ── FSM Transitions ───────────────────────────────────────
 
     @transaction.atomic
     def assign(self, provider):
-        """Assign a provider. Transitions: pending -> assigned."""
+        """Admin assigns a provider. Transitions: pending → assigned."""
         if not self.can_assign():
             raise ValueError(
                 f"Cannot assign from '{self.get_status_display()}' status."
@@ -152,20 +170,20 @@ class ServiceRequest(models.Model):
         self.provider = provider
         self.status = ServiceRequestStatus.ASSIGNED
         self.assigned_at = timezone.now()
-        self.save(update_fields=["provider", "status", "assigned_at"])
+        self.save(update_fields=["provider", "status", "assigned_at", "updated_at"])
         provider.__class__.objects.filter(pk=provider.pk).update(
             total_jobs=F("total_jobs") + 1
         )
 
     def confirm(self):
-        """Provider confirms attendance. Transitions: assigned → confirmed."""
+        """Provider accepts the assignment. Transitions: assigned → confirmed."""
         if not self.can_confirm():
             raise ValueError(
                 f"Cannot confirm from '{self.get_status_display()}' status."
             )
         self.status = ServiceRequestStatus.CONFIRMED
         self.confirmed_at = timezone.now()
-        self.save(update_fields=["status", "confirmed_at"])
+        self.save(update_fields=["status", "confirmed_at", "updated_at"])
 
     def start(self):
         """Provider starts work. Transitions: confirmed → in_progress."""
@@ -173,23 +191,23 @@ class ServiceRequest(models.Model):
             raise ValueError(f"Cannot start from '{self.get_status_display()}' status.")
         self.status = ServiceRequestStatus.IN_PROGRESS
         self.started_at = timezone.now()
-        self.save(update_fields=["status", "started_at"])
+        self.save(update_fields=["status", "started_at", "updated_at"])
 
     @transaction.atomic
     def complete(self, final_price=None):
-        """Complete the job and update provider/customer stats.
-        Transitions: in_progress → completed."""
+        """Provider completes the job. Transitions: in_progress → completed."""
         if not self.can_complete():
             raise ValueError(
                 f"Cannot complete from '{self.get_status_display()}' status."
             )
-        update_fields = ["status", "completed_at"]
+        update_fields = ["status", "completed_at", "updated_at"]
         if final_price is not None:
             self.final_price = final_price
             update_fields.append("final_price")
         self.status = ServiceRequestStatus.COMPLETED
         self.completed_at = timezone.now()
         self.save(update_fields=update_fields)
+
         if self.provider_id:
             self.provider.__class__.objects.filter(pk=self.provider_id).update(
                 completed_jobs=F("completed_jobs") + 1,
@@ -202,10 +220,10 @@ class ServiceRequest(models.Model):
 
     @transaction.atomic
     def cancel(self, cancelled_by, reason=""):
-        """Cancel the request and roll back provider job count if needed.
-        Transitions: any non-terminal -> cancelled."""
+        """Cancel the request. Transitions: any non-terminal → cancelled."""
         if not self.can_cancel():
             raise ValueError(f"Cannot cancel a '{self.get_status_display()}' request.")
+        # Roll back provider job count if they were already involved
         if self.provider_id and self.status in (
             ServiceRequestStatus.ASSIGNED,
             ServiceRequestStatus.CONFIRMED,
@@ -224,14 +242,16 @@ class ServiceRequest(models.Model):
                 "cancelled_by",
                 "cancellation_reason",
                 "cancelled_at",
+                "updated_at",
             ]
         )
 
-    def can_decline(self):
-        return self.status == ServiceRequestStatus.ASSIGNED
-
+    @transaction.atomic
     def decline(self, reason=""):
-        """Provider declines. Transitions: assigned → pending (back to pool)."""
+        """Provider declines the assignment. Transitions: assigned → pending.
+
+        The request goes back to the pool for admin to reassign to another provider.
+        """
         if not self.can_decline():
             raise ValueError(
                 f"Cannot decline from '{self.get_status_display()}' status."
@@ -243,7 +263,13 @@ class ServiceRequest(models.Model):
         self.status = ServiceRequestStatus.PENDING
         self.provider = None
         self.assigned_at = None
-        self.cancellation_reason = reason  # reuse field for decline reason
+        self.decline_reason = reason
         self.save(
-            update_fields=["status", "provider", "assigned_at", "cancellation_reason"]
+            update_fields=[
+                "status",
+                "provider",
+                "assigned_at",
+                "decline_reason",
+                "updated_at",
+            ]
         )

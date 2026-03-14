@@ -83,6 +83,7 @@ make test-v                                            # Run all tests with verb
 make test-app app=apps.customer.tests.test_views
 make test-app app=apps.provider.tests.test_views
 make test-app app=apps.core.tests.test_views
+make test-app app=apps.booking.tests.test_views
 
 # Run specific test class
 make test-class path=apps.customer.tests.test_views.CustomerRegisterTests
