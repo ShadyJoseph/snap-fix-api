@@ -175,6 +175,44 @@ class ServiceRequest(models.Model):
             total_jobs=F("total_jobs") + 1
         )
 
+    @transaction.atomic
+    def self_assign(self, provider):
+        """Provider picks a pending request from the open pool.
+
+        Transitions: pending → assigned.
+        Guard: provider must have no active (assigned/confirmed/in_progress) jobs.
+        Uses select_for_update to prevent two providers grabbing the same request.
+        """
+        # Re-fetch with a row lock to prevent race conditions
+        obj = ServiceRequest.objects.select_for_update().get(pk=self.pk)
+        if obj.status != ServiceRequestStatus.PENDING:
+            raise ValueError("This request is no longer available.")
+
+        active_statuses = [
+            ServiceRequestStatus.ASSIGNED,
+            ServiceRequestStatus.CONFIRMED,
+            ServiceRequestStatus.IN_PROGRESS,
+        ]
+        has_active = ServiceRequest.objects.filter(
+            provider=provider, status__in=active_statuses
+        ).exists()
+        if has_active:
+            raise ValueError(
+                "You already have an active job. "
+                "Complete or cancel it before picking a new one."
+            )
+
+        obj.provider = provider
+        obj.status = ServiceRequestStatus.ASSIGNED
+        obj.assigned_at = timezone.now()
+        obj.save(update_fields=["provider", "status", "assigned_at", "updated_at"])
+
+        provider.__class__.objects.filter(pk=provider.pk).update(
+            total_jobs=F("total_jobs") + 1
+        )
+        # Sync the in-memory instance so the caller gets fresh data
+        self.refresh_from_db()
+
     def confirm(self):
         """Provider accepts the assignment. Transitions: assigned → confirmed."""
         if not self.can_confirm():

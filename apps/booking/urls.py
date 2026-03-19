@@ -9,6 +9,8 @@ from .views import (
     ProviderCompleteView,
     ProviderDeclineView,
     ProviderIncomingRequestsView,
+    ProviderOpenRequestsView,
+    ProviderPickRequestView,
     ProviderRequestListView,
     ProviderStartView,
 )
@@ -62,5 +64,15 @@ urlpatterns += [
         "requests/<uuid:pk>/provider-cancel/",
         ProviderCancelView.as_view(),
         name="request-provider-cancel",
+    ),
+    path(
+        "requests/open/",
+        ProviderOpenRequestsView.as_view(),
+        name="request-open-pool",
+    ),
+    path(
+        "requests/<uuid:pk>/pick/",
+        ProviderPickRequestView.as_view(),
+        name="request-pick",
     ),
 ]

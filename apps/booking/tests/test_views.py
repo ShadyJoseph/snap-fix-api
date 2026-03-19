@@ -689,3 +689,217 @@ class InvalidTransitionRegressionTest(BookingTestCase):
         self.set_status(sr, ServiceRequestStatus.COMPLETED)
         response = self.client.post(reverse("request-cancel", args=[sr.id]), {})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# ── Provider: Open Pool ───────────────────────────────────────────────────────
+
+
+class ProviderOpenRequestsTests(BookingTestCase):
+    url = reverse("request-open-pool")
+
+    def test_returns_only_pending_requests(self):
+        self.authenticate_provider()
+        pending = self.make_request(title="Pending Job")
+        assigned = self.make_request(title="Assigned Job")
+        self.assign_to_provider(assigned)
+
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = self.get_results(response)
+        ids = [str(r["id"]) for r in results]
+        self.assertIn(str(pending.id), ids)
+        self.assertNotIn(str(assigned.id), ids)
+
+    def test_urgent_requests_appear_first(self):
+        self.authenticate_provider()
+        normal = self.make_request(title="Normal", is_urgent=False)
+        urgent = self.make_request(title="Urgent", is_urgent=True)
+
+        response = self.client.get(self.url)
+        results = self.get_results(response)
+        ids = [str(r["id"]) for r in results]
+        self.assertLess(ids.index(str(urgent.id)), ids.index(str(normal.id)))
+
+    def test_customer_cannot_access_open_pool(self):
+        self.authenticate_customer()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_returns_401(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_empty_pool_returns_empty_list(self):
+        self.authenticate_provider()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(self.get_results(response)), 0)
+
+
+# ── Provider: Pick (Self-Assign) ──────────────────────────────────────────────
+
+
+class ProviderPickRequestTests(BookingTestCase):
+    def _pick_url(self, sr):
+        return reverse("request-pick", args=[sr.id])
+
+    def test_pick_pending_request_transitions_to_assigned(self):
+        self.authenticate_provider()
+        sr = self.make_request()
+        response = self.client.post(self._pick_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
+        self.assertEqual(sr.provider, self.provider)
+        self.assertIsNotNone(sr.assigned_at)
+
+    def test_pick_increments_provider_total_jobs(self):
+        self.authenticate_provider()
+        jobs_before = self.provider.total_jobs
+        sr = self.make_request()
+        self.client.post(self._pick_url(sr))
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.total_jobs, jobs_before + 1)
+
+    def test_cannot_pick_if_already_has_assigned_job(self):
+        self.authenticate_provider()
+        self.assign_to_provider(self.make_request())  # active job
+        second = self.make_request(title="Second Job")
+        response = self.client.post(self._pick_url(second))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_pick_if_already_has_confirmed_job(self):
+        self.authenticate_provider()
+        confirmed = self.make_request(title="Confirmed Job")
+        self.set_status(
+            confirmed, ServiceRequestStatus.CONFIRMED, provider=self.provider
+        )
+        second = self.make_request(title="Second Job")
+        response = self.client.post(self._pick_url(second))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_pick_if_already_has_in_progress_job(self):
+        self.authenticate_provider()
+        in_progress = self.make_request(title="In Progress Job")
+        self.set_status(
+            in_progress, ServiceRequestStatus.IN_PROGRESS, provider=self.provider
+        )
+        second = self.make_request(title="Second Job")
+        response = self.client.post(self._pick_url(second))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_can_pick_after_previous_job_completed(self):
+        """Completed jobs must not block picking a new one."""
+        self.authenticate_provider()
+        done = self.make_request(title="Done Job")
+        self.set_status(done, ServiceRequestStatus.COMPLETED, provider=self.provider)
+        new = self.make_request(title="New Job")
+        response = self.client.post(self._pick_url(new))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_cannot_pick_already_assigned_request(self):
+        """A request grabbed by another provider is no longer pending."""
+        self.authenticate_provider()
+        other_provider = create_provider(email="other@provider.com")
+        sr = self.assign_to_provider(self.make_request(), provider=other_provider)
+        response = self.client.post(self._pick_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cannot_pick_nonexistent_request(self):
+        self.authenticate_provider()
+        import uuid
+
+        response = self.client.post(reverse("request-pick", args=[uuid.uuid4()]))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_customer_cannot_pick(self):
+        sr = self.make_request()
+        self.authenticate_customer()
+        response = self.client.post(self._pick_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_returns_401(self):
+        sr = self.make_request()
+        response = self.client.post(self._pick_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ── Regression: Provider Self-Assignment Lifecycle ────────────────────────────
+
+
+class ProviderSelfAssignLifecycleTest(BookingTestCase):
+    """
+    Provider picks from the open pool and completes the full lifecycle.
+
+        pending → (provider picks) → assigned → confirmed → in_progress → completed
+    """
+
+    def test_pick_then_full_lifecycle(self):
+        # 1. Customer creates request
+        self.authenticate_customer()
+        response = self.client.post(
+            reverse("request-list-create"),
+            {
+                "category": self.category.id,
+                "region": self.region.id,
+                "address": "123 Test St",
+                "title": "Self-assign lifecycle test",
+                "description": "Provider picks from pool",
+                "preferred_date": "2026-06-01",
+                "preferred_time": "10:00:00",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        sr_id = response.data["id"]
+
+        # 2. Provider sees it in the open pool
+        self.authenticate_provider()
+        pool_response = self.client.get(reverse("request-open-pool"))
+        pool_ids = [r["id"] for r in self.get_results(pool_response)]
+        self.assertIn(sr_id, pool_ids)
+
+        # 3. Provider picks it
+        response = self.client.post(reverse("request-pick", args=[sr_id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.ASSIGNED)
+
+        # 4. Request no longer in open pool
+        pool_response = self.client.get(reverse("request-open-pool"))
+        pool_ids = [r["id"] for r in self.get_results(pool_response)]
+        self.assertNotIn(sr_id, pool_ids)
+
+        # 5. Appears in provider's incoming list
+        incoming = self.client.get(reverse("request-incoming"))
+        incoming_ids = [r["id"] for r in self.get_results(incoming)]
+        self.assertIn(sr_id, incoming_ids)
+
+        # 6. Standard flow: accept → start → complete
+        self.client.post(reverse("request-accept", args=[sr_id]))
+        self.client.post(reverse("request-start", args=[sr_id]))
+        response = self.client.post(
+            reverse("request-complete", args=[sr_id]), {"final_price": "250.00"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        sr = ServiceRequest.objects.get(id=sr_id)
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.provider, self.provider)
+
+    def test_two_providers_race_only_one_wins(self):
+        """Both providers attempt to pick the same request — exactly one succeeds."""
+        sr = self.make_request()
+        second_provider = create_provider(email="second@provider.com")
+
+        self.client.force_authenticate(user=self.provider)
+        r1 = self.client.post(reverse("request-pick", args=[sr.id]))
+
+        self.client.force_authenticate(user=second_provider)
+        r2 = self.client.post(reverse("request-pick", args=[sr.id]))
+
+        statuses = {r1.status_code, r2.status_code}
+        self.assertIn(status.HTTP_200_OK, statuses)
+        self.assertIn(status.HTTP_404_NOT_FOUND, statuses)
+
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
+        self.assertIsNotNone(sr.provider)

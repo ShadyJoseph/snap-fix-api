@@ -273,3 +273,40 @@ class ProviderCancelView(APIView):
         )
 
         return Response(ServiceRequestSerializer(sr).data)
+
+
+class ProviderPickRequestView(APIView):
+    """
+    POST /api/v1/bookings/requests/{id}/pick/
+    Provider self-assigns a pending request from the open pool.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        provider = get_provider_or_403(request.user)
+        # Must be pending — no provider filter here since it's unassigned
+        sr = get_request_or_404(
+            pk, ServiceRequest.objects.filter(status=ServiceRequestStatus.PENDING)
+        )
+        fsm_transition(lambda: sr.self_assign(provider))
+        return Response(ServiceRequestSerializer(sr).data)
+
+
+class ProviderOpenRequestsView(generics.ListAPIView):
+    """
+    GET /api/v1/bookings/requests/open/
+    Pool of pending requests visible to all providers.
+    Providers use this to browse and pick a job.
+    """
+
+    serializer_class = ServiceRequestSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        get_provider_or_403(self.request.user)
+        return (
+            ServiceRequest.objects.filter(status=ServiceRequestStatus.PENDING)
+            .select_related("category", "region")
+            .order_by("-is_urgent", "-created_at")  # urgent first
+        )

@@ -9,24 +9,28 @@ All endpoints require: Authorization: Token <knox-token>
 STATE FLOW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-pending → assigned → confirmed → in_progress → completed
-↓
-declined → pending (back to pool for reassignment)
+pending ──→ assigned ──→ confirmed ──→ in_progress ──→ completed
+↑ │
+│ └──→ declined ──→ pending (back to pool)
+│
+└── assigned by admin OR self-assigned by provider (pick)
 
 CANCELLED is reachable from any non-terminal state.
-DECLINED and COMPLETED are terminal — no further transitions.
+COMPLETED and CANCELLED are terminal — no further transitions.
 
 Status Who triggers it
-
----
-
+─────────────────────────────────────────────────────────
 pending Created by customer
-assigned Admin assigns a provider
+assigned Admin assigns a provider OR
+Provider picks from the open pool
 confirmed Provider accepts the assignment
 in_progress Provider starts work
 completed Provider finishes the job
 cancelled Customer, provider, or admin cancels
 declined Provider rejects assignment (resets to pending)
+
+Guard (pick only): a provider cannot self-assign if they
+already have an active job (assigned / confirmed / in_progress).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CUSTOMERS
@@ -169,8 +173,8 @@ GET /api/v1/core/categories/
 
     Response 200:
     [
-        { "id": 1, "name": "Plumbing",     "icon": "wrench" },
-        { "id": 2, "name": "Electrical",   "icon": "bolt"   }
+        { "id": 1, "name": "Plumbing",   "icon": "wrench" },
+        { "id": 2, "name": "Electrical", "icon": "bolt"   }
     ]
 
 ────────────────────────────────────────────────────────
@@ -283,11 +287,47 @@ POST /api/v1/bookings/requests/<id>/cancel/
 BOOKING — PROVIDER ENDPOINTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+GET /api/v1/bookings/requests/open/
+
+    Browse all pending requests available for self-assignment.
+    Urgent requests appear first, then by newest created_at.
+    Returns 404 if a specific request is no longer pending
+    (already picked by another provider).
+
+    Response 200 (paginated):
+    {
+        "count":   3,
+        "next":    null,
+        "previous": null,
+        "results": [ <ServiceRequest>, ... ]
+    }
+
+────────────────────────────────────────────────────────
+
+POST /api/v1/bookings/requests/<id>/pick/
+
+    Provider self-assigns a pending request from the open pool.
+    Transition: pending → assigned.
+
+    Guard: fails if the provider already has a job in any of
+    these statuses: assigned, confirmed, in_progress.
+    Concurrent picks are safe — the first request wins via
+    a database-level row lock; the second receives 404.
+
+    Request: (no body required)
+
+    Response 200: <ServiceRequest>  (status: "assigned", assigned_at: <timestamp>)
+    Response 400: provider already has an active job
+    Response 404: request not found or no longer pending
+
+────────────────────────────────────────────────────────
+
 GET /api/v1/bookings/requests/incoming/
 
     Lists requests assigned to the provider awaiting accept or decline.
     Status filter: assigned.
     Ordered by assigned_at descending.
+    Includes requests assigned by admin AND self-assigned via /pick/.
 
     Response 200 (paginated):
     {
@@ -314,6 +354,7 @@ POST /api/v1/bookings/requests/<id>/accept/
 
     Provider accepts the assignment.
     Transition: assigned → confirmed.
+    Works for both admin-assigned and self-assigned requests.
 
     Request: (no body required)
 
@@ -326,7 +367,8 @@ POST /api/v1/bookings/requests/<id>/decline/
 
     Provider declines the assignment.
     Transition: assigned → pending.
-    The request returns to the pool. Admin can reassign to another provider.
+    The request returns to the open pool. Admin can reassign
+    or another provider can pick it.
 
     Request:
     {
@@ -386,24 +428,28 @@ POST /api/v1/bookings/requests/<id>/provider-cancel/
 STATUS REFERENCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Status Description:
-
-pending Request created, waiting for admin to assign a provider
-assigned Admin assigned a provider, awaiting accept or decline
+Status Description
+─────────────────────────────────────────────────────────
+pending Request created, waiting to be assigned
+assigned Provider assigned (by admin or self-picked),
+awaiting accept or decline
 confirmed Provider accepted — job is scheduled
 in_progress Provider has started work on-site
 completed Job finished, all stats updated [TERMINAL]
 cancelled Cancelled by customer, provider, or admin
 declined Provider rejected assignment [TERMINAL]
-(request is reset to pending for reassignment)
+(request resets to pending for reassignment)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ERROR REFERENCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Code Meaning:
-
-400 Invalid transition (wrong status) or validation failure
+Code Meaning
+─────────────────────────────────────────────────────────
+400 Invalid transition (wrong status), validation failure,
+or provider already has an active job (pick guard)
 401 Missing or invalid Knox token
 403 Token valid but resource belongs to another user
-404 Request UUID not found or not owned by the caller
+404 Request UUID not found, not owned by the caller,
+or no longer in the required status (e.g. picked
+by another provider before this request landed)
