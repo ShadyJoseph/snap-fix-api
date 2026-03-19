@@ -84,3 +84,7 @@ Thumbs.db
 # Media files
 media/
 onboarding/
+
+
+# local scripts
+local_scripts/
