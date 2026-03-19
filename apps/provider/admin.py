@@ -480,7 +480,8 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     @admin.display(description="Applicant")
     def applicant_link(self, obj: ProviderOnboarding) -> str:
         if not obj.applicant_id:
-            return format_html(
+            # template. Use mark_safe() for static strings that contain no user data.
+            return mark_safe(  # noqa: S308
                 '<span style="color:#999;font-style:italic">Walk-in</span>'
             )
         url = reverse("admin:provider_provider_change", args=[obj.applicant_id])
