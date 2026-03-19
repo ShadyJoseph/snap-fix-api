@@ -16,10 +16,9 @@ class ProviderRegisterView(generics.CreateAPIView):
     """
     POST /api/v1/providers/register/
 
-    Creates a Provider account with is_active=False.
-    The provider must visit the office — staff fill in documents and
-    personal details via the admin dashboard, then approve the account.
-    No token is issued here since the account is inactive.
+    Creates an inactive Provider account with the password the provider sets here.
+    The provider must then visit the office — staff verify documents and approve.
+    No token is issued since the account is inactive until approved.
     """
 
     serializer_class = ProviderRegisterSerializer

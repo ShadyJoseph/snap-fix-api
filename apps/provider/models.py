@@ -134,6 +134,9 @@ class ProviderOnboarding(models.Model):
     Onboarding application filled by staff at the office.
     Single source of truth for all provider documents.
 
+    The provider MUST register via the mobile app before visiting the office.
+    Staff fill in documents and verify details — they never set a password.
+
     State machine
     -------------
     pending → under_review → approved
@@ -143,8 +146,8 @@ class ProviderOnboarding(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # Pre-registered provider who came via the mobile app.
-    # NULL for walk-ins who have no prior account.
+    # The pre-registered provider who came via the mobile app.
+    # Always required — walk-ins must register via the app first.
     applicant = models.OneToOneField(
         Provider,
         on_delete=models.SET_NULL,
@@ -277,8 +280,6 @@ class ProviderOnboarding(models.Model):
         if self.date_of_birth and self.age < 18:
             raise ValidationError({"date_of_birth": "Applicant must be 18 or older."})
 
-        # staff could link applicant_A to an onboarding with
-        # email_B, then approve() would activate the wrong provider account.
         # Enforce that the applicant FK always matches the onboarding email.
         if self.applicant_id and self.applicant and self.applicant.email != self.email:
             raise ValidationError(
@@ -286,14 +287,13 @@ class ProviderOnboarding(models.Model):
                     "applicant": (
                         f"Applicant email ({self.applicant.email}) does not match "
                         f"the application email ({self.email}). "
-                        "Update the email field to match the applicant, "
-                        "or clear the applicant selection for a walk-in."
+                        "Update the email field to match the applicant."
                     )
                 }
             )
 
-        # On create only: block duplicate emails unless it belongs to a
-        # pending (not-yet-activated) provider who is completing onboarding.
+        # On create: block duplicate emails unless it belongs to a pending
+        # (not-yet-activated) provider who is completing onboarding.
         if not self.pk and User.objects.filter(email=self.email).exists():
             is_pending_provider = Provider.objects.filter(
                 email=self.email,
@@ -303,8 +303,7 @@ class ProviderOnboarding(models.Model):
             if not is_pending_provider:
                 raise ValidationError({"email": "This email is already registered."})
 
-        # File size guard — only validate fresh uploads; skip stored paths to
-        # avoid FileNotFoundError on ephemeral filesystems (e.g. Railway).
+        # File size guard — only validate fresh uploads.
         file_fields = [
             "nid_front",
             "nid_back",
@@ -355,92 +354,71 @@ class ProviderOnboarding(models.Model):
         self.save()
 
     @transaction.atomic
-    def approve(
-        self, admin_user: Staff | None, password: str | None = None
-    ) -> Provider:
+    def approve(self, admin_user: Staff | None) -> Provider:
         """
         Approve the application and activate the provider account.
 
-        Two paths
-        ---------
-        Pre-registered (applicant is set)
-            Activate the existing inactive Provider without creating a new row.
-        Walk-in (no applicant)
-            Create a brand-new Provider account; password is required.
+        The provider must have pre-registered via the app. Their password is
+        preserved exactly as they set it — staff never touch it.
+
+        Raises ValueError if no pre-registered account is found.
 
         The caller (save_model) must save form data first and call
-        refresh_from_db() before invoking this method so that self reflects
-        the latest database state.
+        refresh_from_db() before invoking this method.
         """
         if not self.can_approve():
             raise ValueError(f"Cannot approve from '{self.status}'.")
 
-        # filter by is_active=False so an already-active user
-        # (admin, client, staff) with the same email is never matched.
-        # The applicant FK is the authoritative link; this fallback only fires
-        # when the FK was not set at onboarding creation time.
-        existing_user = (
+        # Resolve the provider account. Prefer the explicit FK; fall back to
+        # an inactive provider with the same email.
+        existing = (
             self.applicant
             if self.applicant_id
             else User.objects.filter(email=self.email, is_active=False).first()
         )
 
-        if existing_user is not None:
-            if not hasattr(existing_user, "provider"):
-                raise ValueError(
-                    f"'{self.email}' exists but is not a provider account."
-                )
-            provider = existing_user.provider
-            provider.is_active = True
-            provider.is_verified = True
-            provider.verification_status = ProviderVerificationStatus.VERIFIED
-            provider.first_name = self.first_name
-            provider.last_name = self.last_name
-            provider.phone = self.phone
-            provider.address = self.address
-            provider.region = self.region
-            provider.hourly_rate = self.hourly_rate
-            provider.years_of_experience = self.years_of_experience
-            provider.bio = self.bio
-            provider.save(
-                update_fields=[
-                    "is_active",
-                    "is_verified",
-                    "verification_status",
-                    "first_name",
-                    "last_name",
-                    "phone",
-                    "address",
-                    "region",
-                    "hourly_rate",
-                    "years_of_experience",
-                    "bio",
-                ]
+        if existing is None:
+            raise ValueError(
+                f"No pre-registered provider found for '{self.email}'. "
+                "The provider must register via the app before approval."
             )
-            provider.categories.add(self.category)
-        else:
-            if not password:
-                raise ValueError(
-                    "Password is required when no prior registration exists."
-                )
-            provider = Provider.objects.create_user(
-                email=self.email,
-                password=password,
-                first_name=self.first_name,
-                last_name=self.last_name,
-                phone=self.phone,
-                address=self.address,
-                region=self.region,
-                hourly_rate=self.hourly_rate,
-                years_of_experience=self.years_of_experience,
-                bio=self.bio,
-                verification_status=ProviderVerificationStatus.VERIFIED,
-                is_verified=True,
-                is_active=True,
-            )
-            provider.categories.add(self.category)
 
-        # Save only FSM/audit fields — form data was already saved by save_model
+        if not hasattr(existing, "provider"):
+            raise ValueError(f"'{self.email}' exists but is not a provider account.")
+
+        provider = existing.provider
+
+        # Activate and sync staff-verified details from the onboarding form.
+        # Password is intentionally not touched — it was set by the provider.
+        provider.is_active = True
+        provider.is_verified = True
+        provider.verification_status = ProviderVerificationStatus.VERIFIED
+        provider.first_name = self.first_name
+        provider.last_name = self.last_name
+        provider.phone = self.phone
+        provider.address = self.address
+        provider.region = self.region
+        provider.hourly_rate = self.hourly_rate
+        provider.years_of_experience = self.years_of_experience
+        provider.bio = self.bio
+        provider.save(
+            update_fields=[
+                "is_active",
+                "is_verified",
+                "verification_status",
+                "first_name",
+                "last_name",
+                "phone",
+                "address",
+                "region",
+                "hourly_rate",
+                "years_of_experience",
+                "bio",
+            ]
+        )
+        provider.categories.add(self.category)
+
+        # Advance FSM — save only audit fields.
         self.provider = provider
         self.status = OnboardingStatus.APPROVED
         self.reviewed_by = admin_user

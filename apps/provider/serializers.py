@@ -15,8 +15,6 @@ class ProviderRegisterSerializer(serializers.ModelSerializer):
         fields = ["first_name", "last_name", "email", "phone", "password"]
 
     def validate_email(self, value):
-        from apps.user.models import User
-
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("This email is already registered.")
         return value
@@ -36,28 +34,28 @@ class ProviderLoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        auth_user = authenticate(email=data["email"], password=data["password"])
-        if not auth_user or not isinstance(auth_user, User):
+        user = authenticate(email=data["email"], password=data["password"])
+
+        if not user or not isinstance(user, User):
             raise serializers.ValidationError("Invalid credentials.")
 
-        if not auth_user.is_active:
+        if not user.is_active:
             raise serializers.ValidationError(
                 "Your account is not active yet. Please visit our office to complete verification."
             )
-        if not hasattr(auth_user, "provider"):
+
+        if not hasattr(user, "provider"):
             raise serializers.ValidationError("No provider account found.")
-        if (
-            auth_user.provider.verification_status
-            != ProviderVerificationStatus.VERIFIED
-        ):  # type: ignore
+
+        if user.provider.verification_status != ProviderVerificationStatus.VERIFIED:
             raise serializers.ValidationError("Provider account is not verified yet.")
 
-        data["user"] = auth_user
+        data["user"] = user
         return data
 
 
 class ProviderSerializer(serializers.ModelSerializer):
-    """Minimal serializer — used on login response."""
+    """Minimal read-only serializer — used on login response."""
 
     completion_rate = serializers.SerializerMethodField()
 

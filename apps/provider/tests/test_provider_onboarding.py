@@ -1,34 +1,29 @@
 """
-Provider Onboarding – Comprehensive Unit Tests
+Provider Onboarding - Comprehensive Unit Tests
 ================================================
 Run with:
     python manage.py test apps.provider.tests.test_provider_onboarding -v 2
 
 Suites
 ------
-1. ProviderModelTests               – Provider model methods
-2. ProviderOnboardingModelTests     – FSM transitions and guards
-3. ProviderOnboardingAdminFormTests – Admin form validation
-4. OnboardingEdgeCaseTests          – Happy paths and edge cases
-5. ProviderAPITests                 – Register / login / profile endpoints
-6. RegressionTests                  – One test per bug fix; must stay green forever
+1. ProviderModelTests               - Provider model methods
+2. ProviderOnboardingModelTests     - FSM transitions and guards
+3. ProviderOnboardingAdminFormTests - Admin form validation
+4. OnboardingEdgeCaseTests          - Happy paths and edge cases
+5. ProviderAPITests                 - Register / login / profile endpoints
+6. RegressionTests                  - One test per bug fix; must stay green forever
 
-Output
-------
-Test progress is written to the standard test logger at DEBUG level.
-To see it while running:
-    python manage.py test ... --verbosity 2
-Or configure LOGGING in settings to enable the "provider.tests" logger.
+Flow
+----
+All providers MUST register via the mobile app before visiting the office.
+Staff never set or see a password — the provider's registration password is
+the only password and is preserved exactly as set during registration.
 
 Ruff compliance
 ---------------
-T201 – print() replaced with logger.debug() throughout.
-S106 – hardcoded test passwords are accepted in test files; add
-       # noqa: S106  on each line or suppress the rule for the tests
-       directory in ruff.toml: [tool.ruff.lint.per-file-ignores]
-       "apps/*/tests/**" = ["S106"]
-N806 – get_user_model() result stored as `user_model` (lowercase).
-F841 – unused `reviewer` variable removed from regression test.
+T201 - print() replaced with logger.debug() throughout.
+S106 - hardcoded test passwords accepted in test files.
+N806 - get_user_model() result stored as `user_model` (lowercase).
 """
 
 from __future__ import annotations
@@ -46,10 +41,6 @@ from django.test import TestCase
 from django.utils import timezone
 
 log = logging.getLogger("provider.tests")
-
-# ── Output helpers ─────────────────────────────────────────────────────────────
-# All output goes through the standard logging framework so it respects the
-# project's log level configuration and does not trigger ruff T201.
 
 _SEP = "─" * 70
 
@@ -79,10 +70,6 @@ def small_image(name: str = "test.png") -> SimpleUploadedFile:
 
     Django's ImageField runs PIL.Image.open() + image.verify() on every upload.
     Hand-crafted byte strings fail verify() because they lack valid scan data.
-    Pillow.Image.save() always produces a fully valid file — the only approach
-    that works reliably at the form-validation layer.
-    PNG is preferred over JPEG: it is lossless, deterministic, and requires no
-    quality/compression parameters.
     """
     from PIL import Image
 
@@ -127,8 +114,15 @@ def make_staff():
 
 
 def make_provider(
-    email: str | None = None, active: bool = False, verified: bool = False
+    email: str | None = None,
+    active: bool = False,
+    verified: bool = False,
+    password: str = "pass1234!!",  # noqa: S107
 ):
+    """
+    Create a Provider as if they registered via the mobile app.
+    Inactive + pending by default — matching real registration state.
+    """
     from apps.provider.choices import ProviderVerificationStatus
     from apps.provider.models import Provider
 
@@ -141,7 +135,7 @@ def make_provider(
     )
     p = Provider.objects.create_user(  # noqa: S106
         email=email,
-        password="pass1234!!",  # noqa: S106
+        password=password,
         first_name="John",
         last_name="Doe",
         is_active=active,
@@ -152,14 +146,22 @@ def make_provider(
 
 
 def make_onboarding(region, category, applicant=None, email: str | None = None):
+    """
+    Create a ProviderOnboarding application.
+
+    If `applicant` is provided the application is linked to that pre-registered
+    provider (the normal path). If neither applicant nor email is given a fresh
+    email is generated — callers that test the "no applicant" error path can
+    pass email explicitly without an applicant.
+    """
     from apps.provider.models import ProviderOnboarding
 
     uid = uuid.uuid4().hex[:6]
-    email = email or (applicant.email if applicant else f"walkin_{uid}@test.com")
+    email = email or (applicant.email if applicant else f"provider_{uid}@test.com")
     dob = date.today() - timedelta(days=365 * 25)  # 25 years old
     obj = ProviderOnboarding(
         first_name="Jane",
-        last_name="Walk-In",
+        last_name="Smith",
         email=email,
         phone="01012345678",
         date_of_birth=dob,
@@ -190,13 +192,12 @@ class ProviderModelTests(TestCase):
         self.category = make_category()
 
     def test_register_creates_inactive_pending_provider(self) -> None:
-        _section("1.1 – API registration → inactive + pending provider")
+        _section("1.1 - API registration → inactive + pending provider")
         from apps.provider.choices import ProviderVerificationStatus
 
         provider = make_provider(email="new_reg@test.com", active=False, verified=False)
         _show("is_active", provider.is_active)
         _show("verification_status", provider.verification_status)
-        _show("pk", provider.pk)
 
         self.assertFalse(provider.is_active)
         self.assertEqual(
@@ -205,7 +206,7 @@ class ProviderModelTests(TestCase):
         _ok("Registration creates correct initial state")
 
     def test_inactive_provider_cannot_login(self) -> None:
-        _section("1.2 – Inactive provider login attempt")
+        _section("1.2 - Inactive provider login attempt is blocked")
         from rest_framework.exceptions import ValidationError as DRFValidationError
 
         from apps.provider.serializers import ProviderLoginSerializer
@@ -221,7 +222,7 @@ class ProviderModelTests(TestCase):
         _ok("Inactive provider correctly blocked from logging in")
 
     def test_verified_provider_can_login(self) -> None:
-        _section("1.3 – Verified active provider login")
+        _section("1.3 - Verified active provider login succeeds")
         from apps.provider.serializers import ProviderLoginSerializer
 
         make_provider(email="verified@test.com", active=True, verified=True)
@@ -233,11 +234,38 @@ class ProviderModelTests(TestCase):
         self.assertTrue(is_valid)
         _ok("Verified provider logged in successfully")
 
+    def test_provider_password_preserved_after_approval(self) -> None:
+        _section("1.4 - Provider password unchanged after staff approval")
+        from django.contrib.auth import authenticate
+
+        provider = make_provider(
+            email="passcheck@test.com",
+            active=False,
+            password="my_secret_pw!!",  # noqa: S106
+        )
+        staff = make_staff()
+        region = make_region()
+        category = make_category()
+
+        app = make_onboarding(region, category, applicant=provider)
+        app.move_to_review(staff)
+        app.refresh_from_db()
+        app.approve(staff)
+        provider.refresh_from_db()
+
+        # authenticate() hashes the plain-text and checks against the stored hash
+        authed = authenticate(email="passcheck@test.com", password="my_secret_pw!!")  # noqa: S106
+        _show("authenticate() returned user", authed is not None)
+        self.assertIsNotNone(authed)
+        self.assertEqual(authed.pk, provider.pk)
+        _ok(
+            "Provider password preserved exactly after approval — staff never touched it"
+        )
+
     def test_earnings_and_withdrawal(self) -> None:
-        _section("1.4 – Earnings & withdrawal")
+        _section("1.5 - Earnings & withdrawal")
         p = make_provider(active=True, verified=True)
 
-        _step("Adding 500 EGP …")
         p.add_earnings(Decimal("500.00"))
         p.refresh_from_db()
         _show("total_earnings", p.total_earnings)
@@ -245,28 +273,22 @@ class ProviderModelTests(TestCase):
         self.assertEqual(p.total_earnings, Decimal("500.00"))
         self.assertEqual(p.available_balance, Decimal("500.00"))
 
-        _step("Withdrawing 200 EGP …")
         result = p.withdraw_balance(Decimal("200.00"))
         p.refresh_from_db()
-        _show("withdraw result", result)
-        _show("available_balance after withdraw", p.available_balance)
         self.assertTrue(result)
         self.assertEqual(p.available_balance, Decimal("300.00"))
 
-        _step("Over-withdraw (should fail) …")
         result = p.withdraw_balance(Decimal("1000.00"))
-        _show("over-withdraw result", result)
         self.assertFalse(result)
         _ok("Earnings / withdrawal logic correct")
 
     def test_update_rating(self) -> None:
-        _section("1.5 – update_rating rolling average")
+        _section("1.6 - update_rating rolling average")
         p = make_provider(active=True, verified=True)
 
         for rating in [5, 3, 4]:
             p.update_rating(rating)
             p.refresh_from_db()
-            _show(f"after rating {rating} — average", float(p.average_rating))
 
         self.assertAlmostEqual(
             float(p.average_rating), round((5 + 3 + 4) / 3, 2), places=2
@@ -275,15 +297,13 @@ class ProviderModelTests(TestCase):
         _ok("Rolling average rating correct")
 
     def test_completion_rate(self) -> None:
-        _section("1.6 – get_completion_rate")
+        _section("1.7 - get_completion_rate")
         p = make_provider(active=True, verified=True)
-        _show("rate with 0 jobs", p.get_completion_rate())
         self.assertEqual(p.get_completion_rate(), 0)
 
         p.total_jobs = 10
         p.completed_jobs = 7
         p.save(update_fields=["total_jobs", "completed_jobs"])
-        _show("rate with 7/10", p.get_completion_rate())
         self.assertEqual(p.get_completion_rate(), 70.0)
         _ok("Completion rate correct")
 
@@ -300,26 +320,24 @@ class ProviderOnboardingModelTests(TestCase):
         self.staff = make_staff()
 
     def test_initial_state_is_pending(self) -> None:
-        _section("2.1 – New onboarding starts PENDING")
+        _section("2.1 - New onboarding starts PENDING")
         from apps.provider.choices import OnboardingStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         _show("status", app.status)
         _show("provider_id", app.provider_id)
         _show("applicant_id", app.applicant_id)
 
         self.assertEqual(app.status, OnboardingStatus.PENDING)
         self.assertIsNone(app.provider_id)
+        self.assertEqual(app.applicant_id, provider.pk)
         _ok("Initial onboarding state correct")
 
     def test_fsm_guards_pending(self) -> None:
-        _section("2.2 – FSM guards from PENDING state")
-        app = make_onboarding(self.region, self.category)
-
-        _show("can_review()", app.can_review())
-        _show("can_approve()", app.can_approve())
-        _show("can_reject()", app.can_reject())
-        _show("can_request_changes()", app.can_request_changes())
+        _section("2.2 - FSM guards from PENDING state")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
 
         self.assertTrue(app.can_review())
         self.assertFalse(app.can_approve())
@@ -328,16 +346,11 @@ class ProviderOnboardingModelTests(TestCase):
         _ok("PENDING guards correct")
 
     def test_fsm_guards_under_review(self) -> None:
-        _section("2.3 – FSM guards from UNDER_REVIEW state")
-        app = make_onboarding(self.region, self.category)
+        _section("2.3 - FSM guards from UNDER_REVIEW state")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
-
-        _show("status", app.status)
-        _show("can_review()", app.can_review())
-        _show("can_approve()", app.can_approve())
-        _show("can_reject()", app.can_reject())
-        _show("can_request_changes()", app.can_request_changes())
 
         self.assertFalse(app.can_review())
         self.assertTrue(app.can_approve())
@@ -346,17 +359,14 @@ class ProviderOnboardingModelTests(TestCase):
         _ok("UNDER_REVIEW guards correct")
 
     def test_move_to_review_sets_reviewer_and_timestamp(self) -> None:
-        _section("2.4 – move_to_review sets reviewer + reviewed_at")
+        _section("2.4 - move_to_review sets reviewer + reviewed_at")
         from apps.provider.choices import OnboardingStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         before = timezone.now()
         app.move_to_review(self.staff)
         app.refresh_from_db()
-
-        _show("status", app.status)
-        _show("reviewed_by", app.reviewed_by)
-        _show("reviewed_at", app.reviewed_at)
 
         self.assertEqual(app.status, OnboardingStatus.UNDER_REVIEW)
         self.assertEqual(app.reviewed_by, self.staff)
@@ -365,35 +375,38 @@ class ProviderOnboardingModelTests(TestCase):
         _ok("move_to_review sets correct fields")
 
     def test_move_to_review_from_wrong_state_raises(self) -> None:
-        _section("2.5 – move_to_review from UNDER_REVIEW raises ValueError")
-        app = make_onboarding(self.region, self.category)
+        _section("2.5 - move_to_review from UNDER_REVIEW raises ValueError")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
 
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(ValueError):
             app.move_to_review(self.staff)
-
-        _show("error", str(ctx.exception))
         _ok("Correctly raises ValueError for invalid FSM transition")
 
-    def test_approve_walkin_creates_provider(self) -> None:
-        _section("2.6 – approve() walk-in path creates new Provider")
+    def test_approve_activates_preregistered_provider(self) -> None:
+        _section("2.6 - approve() activates the pre-registered provider")
         from apps.provider.choices import OnboardingStatus, ProviderVerificationStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(
+            email="approval_test@test.com", active=False, verified=False
+        )
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
 
-        provider = app.approve(self.staff, password="secure123!!")  # noqa: S106
+        result = app.approve(self.staff)
         app.refresh_from_db()
+        provider.refresh_from_db()
 
         _show("app.status", app.status)
-        _show("app.provider_id", app.provider_id)
+        _show("result.pk == provider.pk", result.pk == provider.pk)
         _show("provider.is_active", provider.is_active)
         _show("provider.verification_status", provider.verification_status)
-        _show("provider.is_verified", provider.is_verified)
 
         self.assertEqual(app.status, OnboardingStatus.APPROVED)
         self.assertIsNotNone(app.provider_id)
+        self.assertEqual(result.pk, provider.pk)  # same row — not a new user
         self.assertTrue(provider.is_active)
         self.assertTrue(provider.is_verified)
         self.assertEqual(
@@ -401,78 +414,75 @@ class ProviderOnboardingModelTests(TestCase):
         )
         self.assertEqual(provider.email, app.email)
         self.assertIn(self.category, provider.categories.all())
-        _ok("Walk-in approval creates correct Provider account")
+        _ok("Pre-registered provider correctly activated")
 
-    def test_approve_walkin_without_password_raises(self) -> None:
-        _section("2.7 – approve() walk-in without password raises ValueError")
-        app = make_onboarding(self.region, self.category)
+    def test_approve_syncs_onboarding_fields_to_provider(self) -> None:
+        _section("2.7 - approve() syncs staff-verified fields onto provider")
+        provider = make_provider(email="synctest@test.com", active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
+        app.move_to_review(self.staff)
+        app.refresh_from_db()
+        app.approve(self.staff)
+        provider.refresh_from_db()
+
+        self.assertEqual(provider.phone, app.phone)
+        self.assertEqual(provider.address, app.address)
+        self.assertEqual(provider.region, app.region)
+        self.assertEqual(provider.hourly_rate, app.hourly_rate)
+        self.assertEqual(provider.years_of_experience, app.years_of_experience)
+        self.assertEqual(provider.bio, app.bio)
+        _ok("All onboarding fields synced onto provider after approval")
+
+    def test_approve_without_preregistration_raises(self) -> None:
+        _section(
+            "2.8 - approve() raises ValueError when no pre-registered account exists"
+        )
+        # Create an onboarding with an email that has NO matching Provider row.
+        # We bypass the model's clean() email-uniqueness check by using an email
+        # that simply has no User at all — this simulates a staff data-entry error.
+        app = make_onboarding(
+            self.region,
+            self.category,
+            email=f"ghost_{uuid.uuid4().hex[:6]}@test.com",
+        )
         app.move_to_review(self.staff)
         app.refresh_from_db()
 
         with self.assertRaises(ValueError) as ctx:
-            app.approve(self.staff, password=None)
+            app.approve(self.staff)
 
         _show("error", str(ctx.exception))
-        _ok("Correctly raises ValueError when password missing for walk-in")
+        self.assertIn("must register via the app", str(ctx.exception))
+        _ok("Correctly raises ValueError when no pre-registered account found")
 
-    def test_approve_preregistered_activates_existing_provider(self) -> None:
-        _section("2.8 – approve() pre-registered path activates existing Provider")
-        from apps.provider.choices import OnboardingStatus, ProviderVerificationStatus
-
-        existing = make_provider(email="prereg@test.com", active=False, verified=False)
-        app = make_onboarding(self.region, self.category, applicant=existing)
-        app.move_to_review(self.staff)
-        app.refresh_from_db()
-
-        provider = app.approve(self.staff)
-        app.refresh_from_db()
-        existing.refresh_from_db()
-
-        _show("app.status", app.status)
-        _show("provider.pk == existing.pk", provider.pk == existing.pk)
-        _show("existing.is_active", existing.is_active)
-        _show("existing.verification_status", existing.verification_status)
-
-        self.assertEqual(app.status, OnboardingStatus.APPROVED)
-        self.assertEqual(provider.pk, existing.pk)
-        self.assertTrue(existing.is_active)
-        self.assertEqual(
-            existing.verification_status, ProviderVerificationStatus.VERIFIED
-        )
-        _ok("Pre-registered provider correctly activated")
-
-    def test_approve_preregistered_does_not_create_duplicate(self) -> None:
-        _section("2.9 – approve() pre-registered does NOT create a new User row")
+    def test_approve_does_not_create_duplicate_user(self) -> None:
+        _section("2.9 - approve() does NOT create a duplicate User row")
         user_model = get_user_model()
 
-        existing = make_provider(email="nodup@test.com", active=False, verified=False)
+        provider = make_provider(email="nodup@test.com", active=False)
         count_before = user_model.objects.filter(email="nodup@test.com").count()
-        _show("users before approve", count_before)
 
-        app = make_onboarding(self.region, self.category, applicant=existing)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
         app.approve(self.staff)
 
         count_after = user_model.objects.filter(email="nodup@test.com").count()
-        _show("users after approve", count_after)
+        _show("users before", count_before)
+        _show("users after", count_after)
         self.assertEqual(count_before, count_after)
-        _ok("No duplicate user created on pre-registered approval")
+        _ok("No duplicate user created on approval")
 
     def test_reject_sets_correct_fields(self) -> None:
-        _section("2.10 – reject() sets correct fields")
+        _section("2.10 - reject() sets correct fields")
         from apps.provider.choices import OnboardingStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
         app.reject(self.staff, reason="Incomplete NID documents.")
         app.refresh_from_db()
-
-        _show("status", app.status)
-        _show("rejection_reason", app.rejection_reason)
-        _show("rejected_at", app.rejected_at)
-        _show("reviewed_by", app.reviewed_by)
 
         self.assertEqual(app.status, OnboardingStatus.REJECTED)
         self.assertEqual(app.rejection_reason, "Incomplete NID documents.")
@@ -480,20 +490,20 @@ class ProviderOnboardingModelTests(TestCase):
         _ok("reject() sets correct fields")
 
     def test_reject_from_wrong_state_raises(self) -> None:
-        _section("2.11 – reject() from PENDING raises ValueError")
-        app = make_onboarding(self.region, self.category)
+        _section("2.11 - reject() from PENDING raises ValueError")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
 
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(ValueError):
             app.reject(self.staff, reason="Bad docs")
-
-        _show("error", str(ctx.exception))
         _ok("reject() from wrong state correctly raises")
 
     def test_request_changes_sets_correct_fields(self) -> None:
-        _section("2.12 – request_changes() sets correct fields")
+        _section("2.12 - request_changes() sets correct fields")
         from apps.provider.choices import OnboardingStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
         app.request_changes(
@@ -501,20 +511,17 @@ class ProviderOnboardingModelTests(TestCase):
         )
         app.refresh_from_db()
 
-        _show("status", app.status)
-        _show("change_requests", app.change_requests)
-        _show("reviewed_at", app.reviewed_at)
-
         self.assertEqual(app.status, OnboardingStatus.CHANGES_REQUIRED)
         self.assertEqual(app.change_requests, "Please upload clearer NID photos.")
         self.assertIsNotNone(app.reviewed_at)
         _ok("request_changes() sets correct fields")
 
     def test_changes_required_can_move_back_to_review(self) -> None:
-        _section("2.13 – CHANGES_REQUIRED → UNDER_REVIEW re-review cycle")
+        _section("2.13 - CHANGES_REQUIRED → UNDER_REVIEW re-review cycle")
         from apps.provider.choices import OnboardingStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
         app.request_changes(self.staff, change_requests="Need updated docs")
@@ -524,16 +531,16 @@ class ProviderOnboardingModelTests(TestCase):
         app.move_to_review(self.staff)
         app.refresh_from_db()
 
-        _show("status after re-review", app.status)
         self.assertEqual(app.status, OnboardingStatus.UNDER_REVIEW)
         _ok("Changes required → re-review cycle works correctly")
 
     def test_approved_application_is_terminal(self) -> None:
-        _section("2.14 – APPROVED application cannot be transitioned further")
-        app = make_onboarding(self.region, self.category)
+        _section("2.14 - APPROVED application cannot be transitioned further")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
-        app.approve(self.staff, password="secure123!!")  # noqa: S106
+        app.approve(self.staff)
         app.refresh_from_db()
 
         self.assertFalse(app.can_review())
@@ -542,12 +549,12 @@ class ProviderOnboardingModelTests(TestCase):
 
         with self.assertRaises(ValueError):
             app.move_to_review(self.staff)
-
         _ok("Approved application is terminal — cannot be transitioned")
 
     def test_rejected_application_is_terminal(self) -> None:
-        _section("2.15 – REJECTED application cannot be transitioned further")
-        app = make_onboarding(self.region, self.category)
+        _section("2.15 - REJECTED application cannot be transitioned further")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
         app.reject(self.staff, reason="Bad actor")
@@ -559,7 +566,7 @@ class ProviderOnboardingModelTests(TestCase):
         _ok("Rejected application is terminal — cannot be transitioned")
 
     def test_underage_applicant_fails_validation(self) -> None:
-        _section("2.16 – Underage applicant fails clean()")
+        _section("2.16 - Underage applicant fails clean()")
         from apps.provider.models import ProviderOnboarding
 
         dob = date.today() - timedelta(days=365 * 17)
@@ -577,34 +584,30 @@ class ProviderOnboardingModelTests(TestCase):
             nid_back=small_image(),
             police_clearance_certificate=small_image(),
         )
-        _step(f"Applicant age: {app.age}")
-        with self.assertRaises(ValidationError) as ctx:
+        with self.assertRaises(ValidationError):
             app.full_clean()
-
-        _show("validation error", str(ctx.exception))
         _ok("Under-18 applicant correctly rejected")
 
     def test_manager_queryset_methods(self) -> None:
-        _section("2.17 – ProviderOnboardingManager queryset methods")
+        _section("2.17 - ProviderOnboardingManager queryset methods")
         from apps.provider.models import ProviderOnboarding
 
-        app_pending = make_onboarding(self.region, self.category)
+        p_pending = make_provider(active=False)
+        app_pending = make_onboarding(self.region, self.category, applicant=p_pending)
 
-        app_review = make_onboarding(self.region, self.category)
+        p_review = make_provider(active=False)
+        app_review = make_onboarding(self.region, self.category, applicant=p_review)
         app_review.move_to_review(self.staff)
 
-        app_approved = make_onboarding(self.region, self.category)
+        p_approved = make_provider(active=False)
+        app_approved = make_onboarding(self.region, self.category, applicant=p_approved)
         app_approved.move_to_review(self.staff)
-        app_approved.approve(self.staff, password="pass1234!!")  # noqa: S106
+        app_approved.approve(self.staff)
 
-        app_rejected = make_onboarding(self.region, self.category)
+        p_rejected = make_provider(active=False)
+        app_rejected = make_onboarding(self.region, self.category, applicant=p_rejected)
         app_rejected.move_to_review(self.staff)
         app_rejected.reject(self.staff, reason="test")
-
-        _show("pending count", ProviderOnboarding.objects.pending().count())
-        _show("under_review count", ProviderOnboarding.objects.under_review().count())
-        _show("approved count", ProviderOnboarding.objects.approved().count())
-        _show("rejected count", ProviderOnboarding.objects.rejected().count())
 
         self.assertIn(app_pending, ProviderOnboarding.objects.pending())
         self.assertIn(app_review, ProviderOnboarding.objects.under_review())
@@ -619,6 +622,12 @@ class ProviderOnboardingModelTests(TestCase):
 
 
 class ProviderOnboardingAdminFormTests(TestCase):
+    """
+    The admin form has NO password fields.
+    Staff never set or see a password — the provider's registration password
+    is the only password and is used as-is on approval.
+    """
+
     def setUp(self) -> None:
         self.region = make_region()
         self.category = make_category()
@@ -642,8 +651,6 @@ class ProviderOnboardingAdminFormTests(TestCase):
             "admin_notes": "",
             "rejection_reason": "",
             "change_requests": "",
-            "set_password": "",
-            "confirm_password": "",
         }
         if extra:
             data.update(extra)
@@ -657,7 +664,7 @@ class ProviderOnboardingAdminFormTests(TestCase):
         }
 
     def test_form_valid_for_pending_status(self) -> None:
-        _section("3.1 – Form valid with PENDING status")
+        _section("3.1 - Form valid with PENDING status")
         from apps.provider.admin import ProviderOnboardingAdminForm
         from apps.provider.choices import OnboardingStatus
 
@@ -666,80 +673,28 @@ class ProviderOnboardingAdminFormTests(TestCase):
             files=self._files(),
         )
         is_valid = form.is_valid()
-        _show("form.is_valid()", is_valid)
         if not is_valid:
             _show("errors", form.errors)
         self.assertTrue(is_valid)
         _ok("Form valid for PENDING status")
 
-    def test_form_requires_password_for_walkin_approval(self) -> None:
-        _section("3.2 – Form requires password for walk-in approval")
+    def test_form_has_no_password_fields(self) -> None:
+        _section("3.2 - Admin form has no password fields")
         from apps.provider.admin import ProviderOnboardingAdminForm
         from apps.provider.choices import OnboardingStatus
 
-        app = make_onboarding(self.region, self.category)
-        app.move_to_review(self.staff)
-        app.refresh_from_db()
-
         form = ProviderOnboardingAdminForm(
-            data=self._form_data(OnboardingStatus.APPROVED, {"email": app.email}),
-            instance=app,
+            data=self._form_data(OnboardingStatus.PENDING),
             files=self._files(),
         )
-        is_valid = form.is_valid()
-        _show("form.is_valid()", is_valid)
-        _show("non_field_errors", form.non_field_errors())
-        self.assertFalse(is_valid)
-        _ok("Form correctly requires password for walk-in approval")
+        _show("fields", list(form.fields.keys()))
+        self.assertNotIn("set_password", form.fields)
+        self.assertNotIn("confirm_password", form.fields)
+        self.assertNotIn("password", form.fields)
+        _ok("No password fields present in admin form — by design")
 
-    def test_form_password_mismatch_rejected(self) -> None:
-        _section("3.3 – Password mismatch rejected by form")
-        from apps.provider.admin import ProviderOnboardingAdminForm
-        from apps.provider.choices import OnboardingStatus
-
-        app = make_onboarding(self.region, self.category)
-        app.move_to_review(self.staff)
-        app.refresh_from_db()
-
-        form = ProviderOnboardingAdminForm(
-            data=self._form_data(
-                OnboardingStatus.APPROVED,
-                {
-                    "email": app.email,
-                    "set_password": "secure1234!!",
-                    "confirm_password": "different_password",
-                },
-            ),
-            instance=app,
-            files=self._files(),
-        )
-        _show("form.is_valid()", form.is_valid())
-        _show("non_field_errors", form.non_field_errors())
-        self.assertFalse(form.is_valid())
-        _ok("Password mismatch correctly rejected")
-
-    def test_form_short_password_rejected(self) -> None:
-        _section("3.4 – Password < 8 chars rejected")
-        from apps.provider.admin import ProviderOnboardingAdminForm
-        from apps.provider.choices import OnboardingStatus
-
-        app = make_onboarding(self.region, self.category)
-        app.move_to_review(self.staff)
-        app.refresh_from_db()
-
-        form = ProviderOnboardingAdminForm(
-            data=self._form_data(
-                OnboardingStatus.APPROVED,
-                {"email": app.email, "set_password": "abc", "confirm_password": "abc"},
-            ),
-            instance=app,
-            files=self._files(),
-        )
-        self.assertFalse(form.is_valid())
-        _ok("Short password correctly rejected")
-
-    def test_form_no_password_needed_for_preregistered(self) -> None:
-        _section("3.5 – No password needed when approving pre-registered provider")
+    def test_form_valid_for_approval_with_preregistered_provider(self) -> None:
+        _section("3.3 - Form valid for approval when provider is pre-registered")
         from apps.provider.admin import ProviderOnboardingAdminForm
         from apps.provider.choices import OnboardingStatus
 
@@ -750,7 +705,6 @@ class ProviderOnboardingAdminFormTests(TestCase):
         app.move_to_review(self.staff)
         app.refresh_from_db()
 
-        _step("Submitting approval form for pre-registered WITHOUT password …")
         form = ProviderOnboardingAdminForm(
             data=self._form_data(
                 OnboardingStatus.APPROVED,
@@ -765,7 +719,61 @@ class ProviderOnboardingAdminFormTests(TestCase):
             _show("errors", form.errors)
             _show("non_field_errors", form.non_field_errors())
         self.assertTrue(is_valid)
-        _ok("Pre-registered approval correctly skips password requirement")
+        _ok("Approval form valid for pre-registered provider — no password needed")
+
+    def test_form_valid_for_rejection(self) -> None:
+        _section("3.4 - Form valid when rejecting")
+        from apps.provider.admin import ProviderOnboardingAdminForm
+        from apps.provider.choices import OnboardingStatus
+
+        existing = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=existing)
+        app.move_to_review(self.staff)
+        app.refresh_from_db()
+
+        form = ProviderOnboardingAdminForm(
+            data=self._form_data(
+                OnboardingStatus.REJECTED,
+                {
+                    "email": existing.email,
+                    "rejection_reason": "Fraudulent documents.",
+                },
+            ),
+            instance=app,
+            files=self._files(),
+        )
+        is_valid = form.is_valid()
+        if not is_valid:
+            _show("errors", form.errors)
+        self.assertTrue(is_valid)
+        _ok("Rejection form valid")
+
+    def test_form_valid_for_changes_required(self) -> None:
+        _section("3.5 - Form valid when requesting changes")
+        from apps.provider.admin import ProviderOnboardingAdminForm
+        from apps.provider.choices import OnboardingStatus
+
+        existing = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=existing)
+        app.move_to_review(self.staff)
+        app.refresh_from_db()
+
+        form = ProviderOnboardingAdminForm(
+            data=self._form_data(
+                OnboardingStatus.CHANGES_REQUIRED,
+                {
+                    "email": existing.email,
+                    "change_requests": "Please provide a clearer NID photo.",
+                },
+            ),
+            instance=app,
+            files=self._files(),
+        )
+        is_valid = form.is_valid()
+        if not is_valid:
+            _show("errors", form.errors)
+        self.assertTrue(is_valid)
+        _ok("Changes-required form valid")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -780,56 +788,61 @@ class OnboardingEdgeCaseTests(TestCase):
         self.staff = make_staff()
 
     def test_double_approve_raises(self) -> None:
-        _section("4.1 – Double approve() raises ValueError")
-        app = make_onboarding(self.region, self.category)
+        _section("4.1 - Double approve() raises ValueError")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
-        app.approve(self.staff, password="first_pass!!")  # noqa: S106
+        app.approve(self.staff)
         app.refresh_from_db()
 
         with self.assertRaises(ValueError) as ctx:
-            app.approve(self.staff, password="second_pass!!")  # noqa: S106
+            app.approve(self.staff)
 
         _show("error", str(ctx.exception))
         _ok("Double-approve correctly raises ValueError")
 
     def test_full_happy_path_preregistered(self) -> None:
-        _section("4.2 – Full happy path: API register → office → approve → login")
+        _section("4.2 - Full happy path: register via app → office → approve → login")
         from apps.provider.choices import OnboardingStatus, ProviderVerificationStatus
         from apps.provider.serializers import ProviderLoginSerializer
 
         _step("Step 1: Provider registers via API …")
         provider = make_provider(
-            email="happypath@test.com", active=False, verified=False
+            email="happypath@test.com",
+            active=False,
+            verified=False,
+            password="my_app_password!!",  # noqa: S106
         )
-        _show("  is_active", provider.is_active)
-        _show("  verification_status", provider.verification_status)
+        self.assertFalse(provider.is_active)
 
         _step("Step 2: Staff creates onboarding application …")
         app = make_onboarding(
             self.region, self.category, applicant=provider, email=provider.email
         )
-        _show("  app.status", app.status)
 
         _step("Step 3: Admin moves to Under Review …")
         app.move_to_review(self.staff)
         app.refresh_from_db()
-        _show("  app.status", app.status)
 
-        _step("Step 4: Admin approves …")
+        _step("Step 4: Admin approves (no password required) …")
         app.approve(self.staff)
         app.refresh_from_db()
         provider.refresh_from_db()
-        _show("  app.status", app.status)
-        _show("  provider.is_active", provider.is_active)
-        _show("  provider.verification_status", provider.verification_status)
 
-        _step("Step 5: Provider logs in …")
+        _show("app.status", app.status)
+        _show("provider.is_active", provider.is_active)
+        _show("provider.verification_status", provider.verification_status)
+
+        _step("Step 5: Provider logs in with their original registration password …")
         serializer = ProviderLoginSerializer(
-            data={"email": "happypath@test.com", "password": "pass1234!!"}  # noqa: S106
+            data={
+                "email": "happypath@test.com",
+                "password": "my_app_password!!",  # noqa: S106
+            }
         )
         is_valid = serializer.is_valid()
-        _show("  login valid", is_valid)
+        _show("login valid", is_valid)
 
         self.assertEqual(app.status, OnboardingStatus.APPROVED)
         self.assertTrue(provider.is_active)
@@ -837,59 +850,168 @@ class OnboardingEdgeCaseTests(TestCase):
             provider.verification_status, ProviderVerificationStatus.VERIFIED
         )
         self.assertTrue(is_valid)
-        _ok("Full happy path completed successfully!")
+        _ok("Full happy path completed — provider logs in with their own password!")
 
-    def test_full_happy_path_walkin(self) -> None:
-        _section("4.3 – Full happy path: walk-in (no prior registration)")
-        from apps.provider.choices import OnboardingStatus, ProviderVerificationStatus
-
-        _step("Step 1: Staff creates walk-in onboarding …")
-        app = make_onboarding(self.region, self.category)
-        _show("  app.email", app.email)
-        _show("  app.applicant_id", app.applicant_id)
-
-        _step("Step 2: Admin moves to Under Review …")
+    def test_approve_without_preregistration_raises_clear_error(self) -> None:
+        _section(
+            "4.3 - approve() with no pre-registered account raises clear ValueError"
+        )
+        # Onboarding email has no matching Provider — simulates staff data-entry error.
+        app = make_onboarding(
+            self.region,
+            self.category,
+            email=f"ghost_{uuid.uuid4().hex[:6]}@test.com",
+        )
         app.move_to_review(self.staff)
         app.refresh_from_db()
 
-        _step("Step 3: Admin approves with password …")
-        provider = app.approve(self.staff, password="walkin_secure!!")  # noqa: S106
-        app.refresh_from_db()
+        with self.assertRaises(ValueError) as ctx:
+            app.approve(self.staff)
 
-        _show("  app.status", app.status)
-        _show("  provider.email", provider.email)
-        _show("  provider.is_active", provider.is_active)
-        _show("  provider.verification_status", provider.verification_status)
-
-        self.assertEqual(app.status, OnboardingStatus.APPROVED)
-        self.assertTrue(provider.is_active)
-        self.assertEqual(
-            provider.verification_status, ProviderVerificationStatus.VERIFIED
-        )
-        _ok("Walk-in happy path completed successfully!")
+        error_msg = str(ctx.exception)
+        _show("error", error_msg)
+        self.assertIn("must register via the app", error_msg)
+        _ok("ValueError raised with clear message directing provider to register first")
 
     def test_changes_required_then_approved(self) -> None:
-        _section("4.4 – Changes required → re-review → approve cycle")
-        from apps.provider.choices import OnboardingStatus
+        _section("4.4 - Changes required → re-review → approve cycle")
+        from apps.provider.choices import OnboardingStatus, ProviderVerificationStatus
 
-        app = make_onboarding(self.region, self.category)
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
         app.move_to_review(self.staff)
         app.refresh_from_db()
 
         _step("Admin requests changes …")
         app.request_changes(self.staff, change_requests="Provide clearer ID photo")
         app.refresh_from_db()
-        _show("  status after changes_required", app.status)
+        self.assertEqual(app.status, OnboardingStatus.CHANGES_REQUIRED)
 
         _step("Provider updates docs, staff re-reviews …")
         app.move_to_review(self.staff)
         app.refresh_from_db()
-        _show("  status after re-review", app.status)
+        self.assertEqual(app.status, OnboardingStatus.UNDER_REVIEW)
 
         _step("Admin approves …")
-        app.approve(self.staff, password="final_pass!!")  # noqa: S106
+        app.approve(self.staff)
         app.refresh_from_db()
-        _show("  status after approval", app.status)
+        provider.refresh_from_db()
 
         self.assertEqual(app.status, OnboardingStatus.APPROVED)
+        self.assertTrue(provider.is_active)
+        self.assertEqual(
+            provider.verification_status, ProviderVerificationStatus.VERIFIED
+        )
         _ok("Changes-required cycle completed and approved successfully!")
+
+    def test_applicant_email_mismatch_fails_validation(self) -> None:
+        _section("4.5 - Applicant email mismatch fails clean()")
+        from apps.provider.models import ProviderOnboarding
+
+        provider = make_provider(email="applicant_a@test.com", active=False)
+
+        # Deliberately set a different email on the onboarding record
+        app = ProviderOnboarding(
+            applicant=provider,
+            first_name="Jane",
+            last_name="Smith",
+            email="different_email@test.com",  # mismatch
+            phone="01012345678",
+            date_of_birth=date.today() - timedelta(days=365 * 25),
+            address="Cairo",
+            region=self.region,
+            category=self.category,
+            hourly_rate=Decimal("150.00"),
+            nid_front=small_image(),
+            nid_back=small_image(),
+            police_clearance_certificate=small_image(),
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            app.full_clean()
+
+        _show("error", str(ctx.exception))
+        _ok("Applicant/email mismatch correctly caught by clean()")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5.  Regression Tests
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class RegressionTests(TestCase):
+    """
+    One test per bug fix. These must stay green forever.
+    """
+
+    def setUp(self) -> None:
+        self.region = make_region()
+        self.category = make_category()
+        self.staff = make_staff()
+
+    def test_approval_preserves_provider_password(self) -> None:
+        """
+        BUG: Staff approval must NEVER change the provider's password.
+        The provider sets their password during registration and it is the only
+        password. approve() must not call set_password() at any point.
+        """
+        _section("R1 - approve() never changes the provider's password")
+        from django.contrib.auth import authenticate
+
+        provider = make_provider(
+            email="regression_pw@test.com",
+            active=False,
+            password="original_pw_123!!",  # noqa: S106
+        )
+        original_hash = provider.password  # store the hash before approval
+
+        app = make_onboarding(self.region, self.category, applicant=provider)
+        app.move_to_review(self.staff)
+        app.refresh_from_db()
+        app.approve(self.staff)
+        provider.refresh_from_db()
+
+        _show("hash unchanged", provider.password == original_hash)
+        self.assertEqual(
+            provider.password,
+            original_hash,
+            "approve() must not modify the provider's password hash",
+        )
+        # Double-check via authenticate()
+        authed = authenticate(
+            email="regression_pw@test.com",
+            password="original_pw_123!!",  # noqa: S106
+        )
+        self.assertIsNotNone(authed)
+        _ok("Password hash unchanged after approval — regression confirmed fixed")
+
+    def test_approve_wrong_state_raises(self) -> None:
+        """
+        BUG: approve() called directly from PENDING (skipping Under Review)
+        must raise ValueError — not silently create a broken account.
+        """
+        _section("R2 - approve() from PENDING raises ValueError")
+        provider = make_provider(active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
+        # Deliberately skip move_to_review()
+
+        with self.assertRaises(ValueError):
+            app.approve(self.staff)
+        _ok("approve() from wrong state raises ValueError")
+
+    def test_applicant_fk_takes_priority_over_email_lookup(self) -> None:
+        """
+        BUG: When applicant FK is set, approve() must use that exact provider row
+        and not fall through to an email-based lookup that could match a different
+        (wrong) account.
+        """
+        _section("R3 - applicant FK takes priority over email lookup")
+        provider_a = make_provider(email="fk_priority@test.com", active=False)
+        app = make_onboarding(
+            self.region, self.category, applicant=provider_a, email=provider_a.email
+        )
+        app.move_to_review(self.staff)
+        app.refresh_from_db()
+        result = app.approve(self.staff)
+
+        self.assertEqual(result.pk, provider_a.pk)
+        _ok("Applicant FK correctly takes priority — correct provider activated")
