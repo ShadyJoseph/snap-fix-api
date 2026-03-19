@@ -34,12 +34,12 @@ INSTALLED_APPS = [
     "rest_framework",
     "knox",
     "corsheaders",
-    "apps.user",
-    "apps.core",
-    "apps.customer",
-    "apps.provider",
-    "apps.staff",
-    "apps.booking",
+    "apps.user.apps.UsersConfig",
+    "apps.core.apps.CoreConfig",
+    "apps.customer.apps.CustomerConfig",
+    "apps.provider.apps.ProviderConfig",
+    "apps.staff.apps.StaffConfig",
+    "apps.booking.apps.BookingConfig",
 ]
 
 MIDDLEWARE = [
