@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 from django import forms
@@ -18,13 +20,12 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = (OnboardingStatus.APPROVED, OnboardingStatus.REJECTED)
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-# ── Helper ────────────────────────────────────────────────────
 
-
-def get_reviewer(request_user):
+def get_reviewer(request_user: User) -> Staff | None:
     """
-    Return a Staff instance for reviewed_by.
+    Return a Staff instance when the acting user is Staff.
     Superusers who are not Staff return None — the field is nullable.
     """
     if isinstance(request_user, Staff):
@@ -32,9 +33,30 @@ def get_reviewer(request_user):
     return None
 
 
-# ─────────────────────────────────────────────────────────────
+def stamp_reviewer(obj: ProviderOnboarding, request_user: User) -> Staff | None:
+    """
+    Preserve the audit trail for superusers who are not Staff.
+
+    - Staff actor  → sets reviewed_by normally; admin_notes untouched.
+    - Superuser    → reviewed_by stays NULL (field is Staff-typed so we
+                     cannot store a plain User there), but the actor's email
+                     is appended to admin_notes so the action is never lost.
+    """
+    reviewer = get_reviewer(request_user)
+    obj.reviewed_by = reviewer
+
+    if reviewer is None:
+        note = f"[Action by superuser: {request_user.email}]"
+        obj.admin_notes = (
+            f"{obj.admin_notes}\n{note}".strip() if obj.admin_notes else note
+        )
+
+    return reviewer
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Provider Admin
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @admin.register(Provider)
@@ -125,7 +147,7 @@ class ProviderAdmin(admin.ModelAdmin):
         ),
     )
 
-    def has_add_permission(self, request):
+    def has_add_permission(self, request) -> bool:
         return False
 
     def get_queryset(self, request):
@@ -137,7 +159,7 @@ class ProviderAdmin(admin.ModelAdmin):
         )
 
     @admin.display(description="Verification")
-    def verification_badge(self, obj):
+    def verification_badge(self, obj: Provider) -> str:
         colors = {
             ProviderVerificationStatus.PENDING: "orange",
             ProviderVerificationStatus.VERIFIED: "green",
@@ -150,27 +172,27 @@ class ProviderAdmin(admin.ModelAdmin):
         )
 
     @admin.display(description="Completion Rate")
-    def completion_rate_display(self, obj):
+    def completion_rate_display(self, obj: Provider) -> str:
         return f"{obj.get_completion_rate()}%"
 
     @admin.action(description="Mark as available")
-    def make_available(self, request, queryset):
+    def make_available(self, request, queryset) -> None:
         updated = queryset.update(is_available=True)
         self.message_user(
             request, f"{updated} provider(s) marked as available.", messages.SUCCESS
         )
 
     @admin.action(description="Mark as unavailable")
-    def make_unavailable(self, request, queryset):
+    def make_unavailable(self, request, queryset) -> None:
         updated = queryset.update(is_available=False)
         self.message_user(
             request, f"{updated} provider(s) marked as unavailable.", messages.WARNING
         )
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Onboarding Form
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class ProviderOnboardingAdminForm(forms.ModelForm):
@@ -219,7 +241,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
             "bio": forms.Textarea(attrs={"rows": 4}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.fields["reviewed_by"].queryset = Staff.objects.filter(is_active=True)
@@ -236,7 +258,7 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         self.fields["applicant"].widget.can_add_related = False
         self.fields["applicant"].widget.can_change_related = False
 
-        # Prefill personal fields from linked applicant
+        # Prefill personal fields from the linked applicant
         instance = kwargs.get("instance")
         if instance and instance.applicant_id:
             applicant = instance.applicant
@@ -288,9 +310,9 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         return cleaned
 
 
-# ─────────────────────────────────────────────────────────────
-# Onboarding Admin
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Onboarding Admin — shared fieldset constants
+# ─────────────────────────────────────────────────────────────────────────────
 
 _FIELDSET_PRE_REGISTERED = (
     "Pre-Registered Provider",
@@ -356,37 +378,66 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         return readonly
 
     def get_fieldsets(self, request, obj=None):
+        personal = (
+            "Personal Information",
+            {
+                "fields": (
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "phone",
+                    "date_of_birth",
+                    "profile_photo",
+                ),
+            },
+        )
+        personal_with_age = (
+            "Personal Information",
+            {
+                "fields": (
+                    "first_name",
+                    "last_name",
+                    "email",
+                    "phone",
+                    "date_of_birth",
+                    "age",
+                    "profile_photo",
+                ),
+            },
+        )
+        documents = (
+            "Documents",
+            {
+                "fields": (
+                    "nid_front",
+                    "nid_back",
+                    "police_clearance_certificate",
+                    "professional_certificate",
+                ),
+            },
+        )
+        documents_with_preview = (
+            "Documents",
+            {
+                "fields": (
+                    "document_preview",
+                    "nid_front",
+                    "nid_back",
+                    "police_clearance_certificate",
+                    "professional_certificate",
+                ),
+            },
+        )
+
         if obj is None:
             return (
                 ("Application Status", {"fields": ("status",)}),
                 _FIELDSET_PRE_REGISTERED,
                 _FIELDSET_PASSWORD,
-                (
-                    "Personal Information",
-                    {
-                        "fields": (
-                            "first_name",
-                            "last_name",
-                            "email",
-                            "phone",
-                            "date_of_birth",
-                            "profile_photo",
-                        ),
-                    },
-                ),
+                personal,
                 _FIELDSET_LOCATION,
                 _FIELDSET_PROFESSIONAL,
-                (
-                    "Documents",
-                    {
-                        "fields": (
-                            "nid_front",
-                            "nid_back",
-                            "police_clearance_certificate",
-                            "professional_certificate",
-                        ),
-                    },
-                ),
+                documents,
                 _FIELDSET_REVIEW,
             )
 
@@ -394,34 +445,10 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             ("Application Status", {"fields": ("status", "provider_link")}),
             _FIELDSET_PRE_REGISTERED,
             _FIELDSET_PASSWORD,
-            (
-                "Personal Information",
-                {
-                    "fields": (
-                        "first_name",
-                        "last_name",
-                        "email",
-                        "phone",
-                        "date_of_birth",
-                        "age",
-                        "profile_photo",
-                    ),
-                },
-            ),
+            personal_with_age,
             _FIELDSET_LOCATION,
             _FIELDSET_PROFESSIONAL,
-            (
-                "Documents",
-                {
-                    "fields": (
-                        "document_preview",
-                        "nid_front",
-                        "nid_back",
-                        "police_clearance_certificate",
-                        "professional_certificate",
-                    ),
-                },
-            ),
+            documents_with_preview,
             _FIELDSET_REVIEW,
             (
                 "Timestamps",
@@ -448,10 +475,10 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             )
         )
 
-    # ── Display ──────────────────────────────────────────────
+    # ── Display helpers ───────────────────────────────────────────────────────
 
     @admin.display(description="Applicant")
-    def applicant_link(self, obj):
+    def applicant_link(self, obj: ProviderOnboarding) -> str:
         if not obj.applicant_id:
             return format_html(
                 '<span style="color:#999;font-style:italic">Walk-in</span>'
@@ -460,7 +487,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         return format_html('<a href="{}">{}</a>', url, obj.applicant.get_full_name())
 
     @admin.display(description="Status")
-    def status_badge(self, obj):
+    def status_badge(self, obj: ProviderOnboarding) -> str:
         colors = {
             OnboardingStatus.PENDING: "#FFA500",
             OnboardingStatus.UNDER_REVIEW: "#2196F3",
@@ -477,7 +504,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         )
 
     @admin.display(description="Provider Account")
-    def provider_link(self, obj):
+    def provider_link(self, obj: ProviderOnboarding) -> str:
         if obj.provider_id:
             url = reverse("admin:provider_provider_change", args=[obj.provider_id])
             return mark_safe(  # noqa: S308
@@ -490,10 +517,10 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         )
 
     @admin.display(description="Documents")
-    def document_preview(self, obj):
+    def document_preview(self, obj: ProviderOnboarding) -> str:
         parts = []
 
-        def img_card(label, f):
+        def img_card(label: str, f) -> str:
             return (
                 f'<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
                 f'<strong style="color:#666">{label}</strong><br><br>'
@@ -501,7 +528,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 f"</div>"
             )
 
-        def link_card(label, f):
+        def link_card(label: str, f) -> str:
             return (
                 f'<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
                 f'<strong style="color:#666">{label}</strong><br><br>'
@@ -528,11 +555,12 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             )
 
         return mark_safe(  # noqa: S308
-            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
-            f"{''.join(parts)}</div>"
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
+            + "".join(parts)
+            + "</div>"
         )
 
-    # ── Save with FSM enforcement ────────────────────────────
+    # ── Save with FSM enforcement ──────────────────────────────────────────────
 
     def save_model(self, request, obj, form, change):
         if not change:
@@ -548,7 +576,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         old_status = old.status
         new_status = obj.status
 
-        # Block any edits on terminal states
+        # Block any edits once the application has reached a terminal state
         if old_status in TERMINAL_STATUSES:
             self.message_user(
                 request,
@@ -564,8 +592,6 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             super().save_model(request, obj, form, change)
             return
 
-        reviewer = get_reviewer(request.user)
-
         try:
             if new_status == OnboardingStatus.UNDER_REVIEW:
                 if old_status not in (
@@ -575,7 +601,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     raise ValueError(
                         f"Cannot move to Under Review from '{old.get_status_display()}'."
                     )
-                obj.reviewed_by = reviewer
+                stamp_reviewer(obj, request.user)
                 obj.reviewed_at = timezone.now()
                 super().save_model(request, obj, form, change)
 
@@ -592,11 +618,16 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     super().save_model(request, obj, form, change)
                     return
 
-                # Save form data first (personal info, docs) keeping status=under_review
-                # so approve() can run the FSM transition cleanly
+                # Save form data first (personal info, docs) keeping
+                # status = under_review so approve() runs a clean FSM transition.
                 obj.status = OnboardingStatus.UNDER_REVIEW
                 super().save_model(request, obj, form, change)
                 obj.refresh_from_db()
+
+                # stamp_reviewer may mutate admin_notes for superusers — persist that.
+                reviewer = stamp_reviewer(obj, request.user)
+                if reviewer is None:
+                    obj.save(update_fields=["admin_notes"])
 
                 password = form.cleaned_data.get("set_password") or None
                 obj.approve(reviewer, password=password)
@@ -608,7 +639,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         f"Cannot reject from '{old.get_status_display()}'. "
                         "Application must be Under Review first."
                     )
-                obj.reviewed_by = reviewer
+                stamp_reviewer(obj, request.user)
                 obj.rejected_at = timezone.now()
                 if not obj.rejection_reason:
                     self.message_user(
@@ -624,7 +655,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         f"Cannot request changes from '{old.get_status_display()}'. "
                         "Application must be Under Review first."
                     )
-                obj.reviewed_by = reviewer
+                stamp_reviewer(obj, request.user)
                 obj.reviewed_at = timezone.now()
                 if not obj.change_requests:
                     self.message_user(
@@ -642,7 +673,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             obj.status = old_status
             super().save_model(request, obj, form, change)
 
-    def _show_password_page(self, request, application, password):
+    def _show_password_page(
+        self, request, application: ProviderOnboarding, password: str | None
+    ) -> HttpResponse:
         """One-time password display after approval — never stored in plaintext."""
         back_url = reverse("admin:provider_provideronboarding_changelist")
         provider_url = reverse(
@@ -653,49 +686,68 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             f'<td style="padding:10px;font-family:monospace;font-size:20px;'
             f'font-weight:bold;color:#1565C0;letter-spacing:2px">{password}</td></tr>'
             if password
-            else '<tr><td style="padding:10px;color:#666">Password</td>'
-            '<td style="padding:10px;color:#999;font-style:italic">'
-            "Set by provider during registration</td></tr>"
+            else (
+                '<tr><td style="padding:10px;color:#666">Password</td>'
+                '<td style="padding:10px;color:#999;font-style:italic">'
+                "Set by provider during registration</td></tr>"
+            )
         )
-        return HttpResponse(f"""
-        <html><body style="font-family:sans-serif;padding:40px;max-width:620px;margin:auto">
-            <div style="background:#E8F5E9;border:2px solid #4CAF50;border-radius:8px;padding:30px">
-                <h2 style="color:#2E7D32;margin-top:0">✅ Provider Account Activated</h2>
-                <p>The account for <strong>{application.get_full_name()}</strong> is ready.</p>
-                <div style="background:white;border-radius:6px;padding:20px;margin:20px 0">
-                    <table style="width:100%;border-collapse:collapse">
-                        <tr>
-                            <td style="padding:10px;color:#666;width:35%">Name</td>
-                            <td style="padding:10px;font-weight:bold">{application.get_full_name()}</td>
-                        </tr>
-                        <tr style="background:#f9f9f9">
-                            <td style="padding:10px;color:#666">Email</td>
-                            <td style="padding:10px;font-weight:bold">{application.email}</td>
-                        </tr>
-                        {password_section}
-                    </table>
+        warning = (
+            "<p style='color:#c62828;font-weight:bold'>"
+            "⚠️ This password will NOT be shown again. Share it with the provider securely."
+            "</p>"
+            if password
+            else ""
+        )
+        return HttpResponse(
+            f"""
+            <html>
+            <body style="font-family:sans-serif;padding:40px;max-width:620px;margin:auto">
+                <div style="background:#E8F5E9;border:2px solid #4CAF50;
+                            border-radius:8px;padding:30px">
+                    <h2 style="color:#2E7D32;margin-top:0">✅ Provider Account Activated</h2>
+                    <p>The account for
+                       <strong>{application.get_full_name()}</strong> is ready.</p>
+                    <div style="background:white;border-radius:6px;padding:20px;margin:20px 0">
+                        <table style="width:100%;border-collapse:collapse">
+                            <tr>
+                                <td style="padding:10px;color:#666;width:35%">Name</td>
+                                <td style="padding:10px;font-weight:bold">
+                                    {application.get_full_name()}
+                                </td>
+                            </tr>
+                            <tr style="background:#f9f9f9">
+                                <td style="padding:10px;color:#666">Email</td>
+                                <td style="padding:10px;font-weight:bold">
+                                    {application.email}
+                                </td>
+                            </tr>
+                            {password_section}
+                        </table>
+                    </div>
+                    {warning}
+                    <div style="display:flex;gap:10px;margin-top:20px">
+                        <a href="{provider_url}"
+                           style="background:#4CAF50;color:white;padding:10px 20px;
+                                  text-decoration:none;border-radius:4px;font-weight:bold">
+                            View Provider Account
+                        </a>
+                        <a href="{back_url}"
+                           style="background:#417690;color:white;padding:10px 20px;
+                                  text-decoration:none;border-radius:4px">
+                            ← Back to Applications
+                        </a>
+                    </div>
                 </div>
-                {"<p style='color:#c62828;font-weight:bold'>⚠️ This password will NOT be shown again. Share it with the provider securely.</p>" if password else ""}
-                <div style="display:flex;gap:10px;margin-top:20px">
-                    <a href="{provider_url}"
-                       style="background:#4CAF50;color:white;padding:10px 20px;
-                              text-decoration:none;border-radius:4px;font-weight:bold">
-                        View Provider Account
-                    </a>
-                    <a href="{back_url}"
-                       style="background:#417690;color:white;padding:10px 20px;
-                              text-decoration:none;border-radius:4px">
-                        ← Back to Applications
-                    </a>
-                </div>
-            </div>
-        </body></html>
-        """)
+            </body>
+            </html>
+            """
+        )
 
-    # ── Bulk Actions ─────────────────────────────────────────
+    # ── Bulk Actions ───────────────────────────────────────────────────────────
 
     @admin.action(description="Move to Under Review")
-    def action_move_to_review(self, request, queryset):
+    def action_move_to_review(self, request, queryset) -> None:
         reviewer = get_reviewer(request.user)
         success = skip = 0
         for app in queryset:
@@ -706,9 +758,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 app.move_to_review(reviewer)
                 success += 1
             except Exception as exc:
-                logger.error(
-                    "Error moving %s to review: %s", app.pk, exc, exc_info=True
-                )
+                logger.exception("Error moving %s to review", app.pk)
                 self.message_user(request, f"Error: {exc}", messages.ERROR)
         if success:
             self.message_user(
@@ -743,7 +793,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         )
 
     @admin.action(description="Reject selected applications")
-    def action_reject(self, request, queryset):
+    def action_reject(self, request, queryset) -> None:
         reviewer = get_reviewer(request.user)
         success = skip = 0
         for app in queryset:
@@ -751,10 +801,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 skip += 1
                 continue
             try:
-                app.reject(reviewer, reason=app.admin_notes or "Rejected by admin.")
+                # use rejection_reason (the formal record) not admin_notes
+                # (internal scratchpad). Fall back to a clear generic string.
+                app.reject(
+                    reviewer,
+                    reason=app.rejection_reason or "Rejected via bulk action.",
+                )
                 success += 1
             except Exception as exc:
-                logger.error("Error rejecting %s: %s", app.pk, exc, exc_info=True)
+                logger.exception("Error rejecting %s", app.pk)
                 self.message_user(request, f"Error: {exc}", messages.ERROR)
         if success:
             self.message_user(
