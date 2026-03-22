@@ -77,3 +77,53 @@ class Region(models.Model):
     def set_location(cls, lat, lng):
         """Helper to create a Point from lat/lng."""
         return Point(x=lng, y=lat, srid=4326)
+
+
+class Office(models.Model):
+    """Physical office locations."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=200)
+    address = models.CharField(max_length=500, help_text="Full string address")
+    landmark = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Nearby famous place e.g. 'Next to Cairo Tower'",
+    )
+    location = models.PointField(
+        geography=True,
+        null=True,
+        blank=True,
+        srid=4326,
+        help_text="Exact coordinates (longitude, latitude)",
+    )
+    region = models.ForeignKey(
+        Region,
+        on_delete=models.PROTECT,
+        related_name="offices",
+    )
+    working_hours = models.CharField(
+        max_length=200,
+        help_text="e.g. 'Sun–Thu 9:00 AM – 5:00 PM'",
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "offices"
+        verbose_name = "Office"
+        verbose_name_plural = "Offices"
+        ordering = ["region", "name"]
+
+    def __str__(self):
+        return f"{self.name} — {self.region.name}"
+
+    @property
+    def latitude(self):
+        return self.location.y if self.location else None
+
+    @property
+    def longitude(self):
+        return self.location.x if self.location else None
