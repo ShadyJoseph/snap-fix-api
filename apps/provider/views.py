@@ -31,9 +31,10 @@ class ProviderRegisterView(generics.CreateAPIView):
         return Response(
             {
                 "message": (
-                    "Registration received. Please visit our office to complete "
+                    "Registration received. Please visit your nearest office to complete "
                     "your verification. You will be able to log in once approved."
-                )
+                ),
+                "next_step": "Visit /api/v1/core/offices/nearest/ to find the closest office to you.",
             },
             status=status.HTTP_201_CREATED,
         )
@@ -84,4 +85,4 @@ class ProviderProfileView(generics.RetrieveAPIView):
     def get_object(self):
         if not hasattr(self.request.user, "provider"):
             raise PermissionDenied("No provider account found.")
-        return self.request.user.provider  # type: ignore
+        return self.request.user.provider

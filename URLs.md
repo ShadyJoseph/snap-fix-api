@@ -187,6 +187,92 @@ GET /api/v1/core/regions/
         { "id": 2, "name": "Giza"  }
     ]
 
+────────────────────────────────────────────────────────
+
+GET /api/v1/core/offices/
+
+    Returns all active offices.
+
+    Response 200:
+    [
+        {
+            "id":           "uuid",
+            "name":         "Cairo Main Office",
+            "address":      "5 Tahrir Square, Cairo",
+            "landmark":     "Next to the Egyptian Museum",
+            "latitude":     "30.044420",
+            "longitude":    "31.235712",
+            "region_name":  "Cairo",
+            "working_hours": "Sun–Thu 9:00 AM – 5:00 PM"
+        }
+    ]
+
+────────────────────────────────────────────────────────
+
+GET /api/v1/core/offices/<id>/
+
+    Returns full detail for a single active office.
+
+    Response 200:
+    {
+        "id":           "uuid",
+        "name":         "Cairo Main Office",
+        "address":      "5 Tahrir Square, Cairo",
+        "landmark":     "Next to the Egyptian Museum",
+        "latitude":     "30.044420",
+        "longitude":    "31.235712",
+        "region": {
+            "id":        "uuid",
+            "name":      "Cairo",
+            "slug":      "cairo",
+            "code":      "CAI",
+            "country":   "Egypt",
+            "latitude":  "30.044420",
+            "longitude": "31.235712",
+            "is_active": true
+        },
+        "working_hours": "Sun–Thu 9:00 AM – 5:00 PM",
+        "is_active":     true,
+        "created_at":    "2025-07-20T08:00:00Z"
+    }
+
+    Response 404: office not found or inactive
+
+────────────────────────────────────────────────────────
+
+GET /api/v1/core/offices/nearest/?lat=<lat>&lng=<lng>
+
+    Returns the single closest active office to the given coordinates.
+    Offices without a saved location are excluded.
+
+    Query params:
+        lat   (required) — user latitude  e.g. 30.044420
+        lng   (required) — user longitude e.g. 31.235712
+
+    Response 200:
+    {
+        "id":           "uuid",
+        "name":         "Cairo Main Office",
+        "address":      "5 Tahrir Square, Cairo",
+        "landmark":     "Next to the Egyptian Museum",
+        "latitude":     "30.044420",
+        "longitude":    "31.235712",
+        "region": { ... },
+        "working_hours": "Sun–Thu 9:00 AM – 5:00 PM",
+        "is_active":     true,
+        "created_at":    "2025-07-20T08:00:00Z",
+        "distance_km":   2.45
+    }
+
+    Response 400: lat or lng missing, or not valid numbers
+    Response 404: no active offices with a saved location exist
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTE — Office management (add / edit / delete) is done
+exclusively via the Admin Dashboard. There are no write
+endpoints for offices in the public API.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BOOKING — CUSTOMER ENDPOINTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

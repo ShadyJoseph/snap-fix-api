@@ -1,7 +1,22 @@
 from django.contrib.gis import admin as gis_admin
 from django.utils.html import format_html
 
-from .models import Category, Region
+from .models import Category, Office, Region
+
+
+class EgyptGISModelAdmin(gis_admin.GISModelAdmin):
+    """
+    Base GIS admin that defaults the map to Egypt and uses
+    a referrer-safe tile source that works on both local and prod.
+    """
+
+    gis_widget_kwargs = {
+        "attrs": {
+            "default_lon": 31.2357,  # Cairo longitude
+            "default_lat": 30.0444,  # Cairo latitude
+            "default_zoom": 6,  # Shows all of Egypt
+        }
+    }
 
 
 @gis_admin.register(Category)
@@ -30,7 +45,7 @@ class CategoryAdmin(gis_admin.ModelAdmin):
 
 
 @gis_admin.register(Region)
-class RegionAdmin(gis_admin.GISModelAdmin):
+class RegionAdmin(EgyptGISModelAdmin):
     list_display = (
         "name",
         "code",
@@ -49,6 +64,26 @@ class RegionAdmin(gis_admin.GISModelAdmin):
     fieldsets = (
         ("Basic Information", {"fields": ("name", "slug", "code", "country")}),
         ("Geographic Data", {"fields": ("location",)}),
+        ("Settings", {"fields": ("is_active",)}),
+        (
+            "Timestamps",
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
+        ),
+    )
+
+
+@gis_admin.register(Office)
+class OfficeAdmin(EgyptGISModelAdmin):
+    list_display = ("name", "region", "working_hours", "is_active", "created_at")
+    list_filter = ("is_active", "region")
+    search_fields = ("name", "address", "landmark")
+    ordering = ("region", "name")
+    readonly_fields = ("created_at", "updated_at")
+
+    fieldsets = (
+        ("Basic Information", {"fields": ("name", "region")}),
+        ("Location", {"fields": ("address", "landmark", "location")}),
+        ("Hours", {"fields": ("working_hours",)}),
         ("Settings", {"fields": ("is_active",)}),
         (
             "Timestamps",
