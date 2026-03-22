@@ -1,0 +1,28 @@
+{% extends "gis/openlayers.html" %} {% block openlayers %} {{ block.super }}
+<script>
+  (function () {
+    // Replace the default OSM layer with CartoDB Positron —
+    // no API key, no referrer restrictions, works on localhost and prod.
+    const cartoLayer = new ol.layer.Tile({
+      source: new ol.source.XYZ({
+        url: "https://{a-d}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+        attributions:
+          '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/">CARTO</a>',
+        maxZoom: 19,
+      }),
+    });
+
+    // Swap the layer once the map widget initializes
+    document.addEventListener("DOMContentLoaded", function () {
+      const maps = Object.values(geodjango);
+      maps.forEach(function (mapWidget) {
+        const map = mapWidget.map;
+        if (!map) return;
+        // Remove the default OSM layer (index 0) and insert CartoDB
+        map.getLayers().removeAt(0);
+        map.getLayers().insertAt(0, cartoLayer);
+      });
+    });
+  })();
+</script>
+{% endblock %}
