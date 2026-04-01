@@ -42,10 +42,10 @@ bash:
 # ── Testing ───────────────────────────────────────────────────
 
 test:
-	$(MANAGE) test
+	$(MANAGE) test apps
 
 test-v:
-	$(MANAGE) test --verbosity=2
+	$(MANAGE) test apps --verbosity=2
 
 test-app:
 	$(MANAGE) test $(app)

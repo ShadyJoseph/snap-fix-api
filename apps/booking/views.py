@@ -1,18 +1,24 @@
 import logging
 
+from django.db import transaction
 from django.http import Http404
-from rest_framework import generics, permissions
+from rest_framework import generics, permissions, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .choices import CancelledBy, ServiceRequestStatus
-from .models import ServiceRequest
+from .models import Review, ServiceRequest
 from .serializers import (
+    CustomerRequestDetailSerializer,
+    ProviderRequestDetailSerializer,
+    ReviewCreateSerializer,
+    ReviewSerializer,
     ServiceRequestCancelSerializer,
     ServiceRequestCompleteSerializer,
     ServiceRequestCreateSerializer,
     ServiceRequestDeclineSerializer,
+    ServiceRequestHistorySerializer,
     ServiceRequestSerializer,
 )
 
@@ -309,4 +315,143 @@ class ProviderOpenRequestsView(generics.ListAPIView):
             ServiceRequest.objects.filter(status=ServiceRequestStatus.PENDING)
             .select_related("category", "region")
             .order_by("-is_urgent", "-created_at")  # urgent first
+        )
+
+
+# ── Rating ────────────────────────────────────────────────────
+
+
+class CustomerRateProviderView(APIView):
+    """
+    POST /api/v1/bookings/requests/{id}/rate/
+
+    Customer rates the provider after completion.
+    Idempotent: returns existing review if already rated.
+    Triggers provider.update_rating() atomically.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        customer = get_customer_or_403(request.user)
+        sr = get_request_or_404(
+            pk,
+            ServiceRequest.objects.filter(customer=customer).select_related("provider"),
+        )
+
+        if sr.status != ServiceRequestStatus.COMPLETED:
+            raise ValidationError("You can only rate a completed request.")
+        if not sr.provider_id:
+            raise ValidationError("No provider associated with this request.")
+
+        # Idempotent — return existing review if already rated
+        if hasattr(sr, "review"):
+            return Response(ReviewSerializer(sr.review).data)
+
+        serializer = ReviewCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            review = Review.objects.create(
+                service_request=sr,
+                customer=customer,
+                provider=sr.provider,
+                rating=serializer.validated_data["rating"],
+                comment=serializer.validated_data.get("comment", ""),
+            )
+            sr.provider.update_rating(review.rating)
+
+        return Response(ReviewSerializer(review).data, status=status.HTTP_201_CREATED)
+
+
+# ── Customer History ──────────────────────────────────────────
+
+
+class CustomerHistoryListView(generics.ListAPIView):
+    """
+    GET /api/v1/bookings/history/customer/
+    ?status=completed  — filter by status (optional)
+
+    Paginated history list for the customer.
+    """
+
+    serializer_class = ServiceRequestHistorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        customer = get_customer_or_403(self.request.user)
+        qs = (
+            ServiceRequest.objects.filter(customer=customer)
+            .select_related("category", "region", "provider")
+            .select_related("review")
+            .order_by("-created_at")
+        )
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+
+class CustomerHistoryDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/bookings/history/customer/{id}/
+
+    Full detail view — includes provider card, review, and is_favorite flag.
+    Drives both the post-completion popup and the history detail screen.
+    """
+
+    serializer_class = CustomerRequestDetailSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        customer = get_customer_or_403(self.request.user)
+        return (
+            ServiceRequest.objects.filter(customer=customer)
+            .select_related("category", "region", "provider")
+            .select_related("review")
+        )
+
+
+# ── Provider History ──────────────────────────────────────────
+
+
+class ProviderHistoryListView(generics.ListAPIView):
+    """
+    GET /api/v1/bookings/history/provider/
+    ?status=completed  — filter by status (optional)
+    """
+
+    serializer_class = ServiceRequestHistorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        provider = get_provider_or_403(self.request.user)
+        qs = (
+            ServiceRequest.objects.filter(provider=provider)
+            .select_related("category", "region", "customer")
+            .select_related("review")
+            .order_by("-created_at")
+        )
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+
+class ProviderHistoryDetailView(generics.RetrieveAPIView):
+    """
+    GET /api/v1/bookings/history/provider/{id}/
+
+    Full detail — includes customer card and the review left for this job.
+    """
+
+    serializer_class = ProviderRequestDetailSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        provider = get_provider_or_403(self.request.user)
+        return (
+            ServiceRequest.objects.filter(provider=provider)
+            .select_related("category", "region", "customer")
+            .select_related("review")
         )

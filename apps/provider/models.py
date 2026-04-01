@@ -12,6 +12,8 @@ from django.core.validators import (
     RegexValidator,
 )
 from django.db import models, transaction
+from django.db.models import DecimalField as DecimalOutputField
+from django.db.models import ExpressionWrapper, F
 from django.utils import timezone
 
 from apps.staff.models import Staff
@@ -121,12 +123,24 @@ class Provider(User):
             return 0
         return round((self.completed_jobs / self.total_jobs) * 100, 2)
 
-    def update_rating(self, new_rating: float) -> None:
-        if 0 <= new_rating <= 5:
-            total = self.average_rating * self.total_reviews
-            self.total_reviews += 1
-            self.average_rating = (total + new_rating) / self.total_reviews
-            self.save(update_fields=["average_rating", "total_reviews"])
+    @property
+    def rating(self) -> float:
+        """Rounded average rating for display on the provider profile."""
+        return round(float(self.average_rating), 2)
+
+    def update_rating(self, new_rating: int) -> None:
+        """Atomically recalculate average_rating using a single DB UPDATE."""
+        if not (1 <= new_rating <= 5):
+            return
+        Provider.objects.filter(pk=self.pk).update(
+            average_rating=ExpressionWrapper(
+                (F("average_rating") * F("total_reviews") + new_rating)
+                / (F("total_reviews") + 1),
+                output_field=DecimalOutputField(max_digits=3, decimal_places=2),
+            ),
+            total_reviews=F("total_reviews") + 1,
+        )
+        self.refresh_from_db()
 
 
 class ProviderOnboarding(models.Model):
