@@ -126,3 +126,22 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
 
     def get_completion_rate(self, obj):
         return obj.get_completion_rate()
+
+
+class ProviderUpdateSerializer(serializers.ModelSerializer):
+    """PATCH /me/ — only non-sensitive profile fields."""
+
+    class Meta:
+        model = Provider
+        fields = [
+            "first_name",
+            "last_name",
+            "phone",
+            "profile_picture",
+            "address",
+            "business_name",
+            "bio",
+            "hourly_rate",
+            "years_of_experience",
+            "is_available",
+        ]

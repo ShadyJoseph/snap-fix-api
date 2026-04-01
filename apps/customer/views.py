@@ -14,6 +14,7 @@ from .serializers import (
     CustomerProfileSerializer,
     CustomerRegisterSerializer,
     CustomerSerializer,
+    CustomerUpdateSerializer,
 )
 
 
@@ -68,14 +69,19 @@ class CustomerLogoutView(KnoxLogoutView):
     permission_classes = [permissions.IsAuthenticated]
 
 
-class CustomerProfileView(generics.RetrieveAPIView):
-    """GET /api/v1/customers/me/"""
+class CustomerProfileView(generics.RetrieveUpdateAPIView):
+    """GET/PATCH /api/v1/customers/me/"""
 
-    serializer_class = CustomerProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_serializer_class(self):
+        if self.request.method == "PATCH":
+            return CustomerUpdateSerializer
+        return CustomerProfileSerializer
 
     def get_object(self):
-        return self.request.user.customer  # type: ignore
+        return get_customer_or_403(self.request.user)
 
 
 # ── Favorites ─────────────────────────────────────────────────

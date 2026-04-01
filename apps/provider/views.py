@@ -9,6 +9,7 @@ from .serializers import (
     ProviderProfileSerializer,
     ProviderRegisterSerializer,
     ProviderSerializer,
+    ProviderUpdateSerializer,
 )
 
 
@@ -72,15 +73,16 @@ class ProviderLogoutView(KnoxLogoutView):
     permission_classes = [permissions.IsAuthenticated]
 
 
-class ProviderProfileView(generics.RetrieveAPIView):
-    """
-    GET /api/v1/providers/me/
+class ProviderProfileView(generics.RetrieveUpdateAPIView):
+    """GET/PATCH /api/v1/providers/me/"""
 
-    Returns the full profile of the currently authenticated provider.
-    """
-
-    serializer_class = ProviderProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_serializer_class(self):
+        if self.request.method == "PATCH":
+            return ProviderUpdateSerializer
+        return ProviderProfileSerializer
 
     def get_object(self):
         if not hasattr(self.request.user, "provider"):

@@ -92,12 +92,34 @@ GET /api/v1/customers/me/
         "phone":          "01284688383",
         "profile_picture": null,
         "address":        "12 Tahrir St",
+        "latitude":       "30.044420",
+        "longitude":      "31.235712",
         "wallet_balance": "0.00",
         "total_cashback": "0.00",
         "total_bookings": 5,
         "is_verified":    true,
         "date_joined":    "2025-01-01T00:00:00Z"
     }
+
+────────────────────────────────────────────────────────
+
+PATCH /api/v1/customers/me/
+
+    Updates non-sensitive profile fields. All fields optional.
+    Locked: email, password, wallet_balance, total_bookings, is_verified.
+
+    Request (all optional):
+    {
+        "first_name":     "Shady",
+        "last_name":      "Joseph",
+        "phone":          "01284688383",
+        "profile_picture": <file>,
+        "address":        "15 Tahrir St",
+        "latitude":       "30.044420",
+        "longitude":      "31.235712"
+    }
+
+    Response 200: updated profile (same shape as GET /me/)
 
 ────────────────────────────────────────────────────────
 
@@ -203,6 +225,31 @@ GET /api/v1/providers/me/
         "total_earnings":    "2400.00",
         "date_joined":       "2025-01-01T00:00:00Z"
     }
+
+────────────────────────────────────────────────────────
+
+PATCH /api/v1/providers/me/
+
+    Updates non-sensitive profile fields. All fields optional.
+    Locked: email, password, region, categories, verification_status,
+            rating, total_reviews, total_jobs, completed_jobs,
+            available_balance, total_earnings.
+
+    Request (all optional):
+    {
+        "first_name":         "Shady",
+        "last_name":          "Joseph",
+        "phone":              "01284688383",
+        "profile_picture":    <file>,
+        "address":            "15 Tahrir St",
+        "business_name":      "Shady Fixes Pro",
+        "bio":                "10 years experience...",
+        "hourly_rate":        "100.00",
+        "years_of_experience": 10,
+        "is_available":       true
+    }
+
+    Response 200: updated profile (same shape as GET /me/)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CORE

@@ -1,3 +1,6 @@
+import io
+
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from knox.models import AuthToken
 from rest_framework import status
@@ -233,4 +236,85 @@ class ProviderProfileTests(APITestCase):
 
         response = self.client.get(self.url)
 
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class ProviderProfileUpdateTests(APITestCase):
+    url = reverse("provider-profile")
+
+    def setUp(self):
+        self.provider = create_provider()
+        _, token = AuthToken.objects.create(self.provider)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+
+    def test_patch_updates_allowed_fields(self):
+        response = self.client.patch(
+            self.url,
+            {
+                "first_name": "Updated",
+                "last_name": "Provider",
+                "business_name": "New Biz",
+                "bio": "10 years experience",
+                "hourly_rate": "120.00",
+                "years_of_experience": 10,
+                "is_available": False,
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.first_name, "Updated")
+        self.assertEqual(self.provider.business_name, "New Biz")
+        self.assertFalse(self.provider.is_available)
+
+    def test_patch_partial_updates_single_field(self):
+        response = self.client.patch(self.url, {"bio": "New bio"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.bio, "New bio")
+
+    def test_patch_is_available_toggle(self):
+        original = self.provider.is_available
+        response = self.client.patch(self.url, {"is_available": not original})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.is_available, not original)
+
+    def test_patch_locked_fields_are_ignored(self):
+        original_email = self.provider.email
+        original_balance = self.provider.available_balance
+        original_status = self.provider.verification_status
+        self.client.patch(
+            self.url,
+            {
+                "email": "hacked@test.com",
+                "available_balance": "9999.00",
+                "verification_status": "pending",
+            },
+        )
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.email, original_email)
+        self.assertEqual(self.provider.available_balance, original_balance)
+        self.assertEqual(self.provider.verification_status, original_status)
+
+    def test_patch_profile_picture_upload(self):
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (1, 1)).save(buf, format="PNG")
+        buf.seek(0)
+        image = SimpleUploadedFile("avatar.png", buf.read(), content_type="image/png")
+        response = self.client.patch(
+            self.url, {"profile_picture": image}, format="multipart"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.provider.refresh_from_db()
+        self.assertTrue(self.provider.profile_picture)
+
+    def test_put_not_allowed(self):
+        response = self.client.put(self.url, {"first_name": "X"})
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_patch_unauthenticated_returns_401(self):
+        self.client.credentials()
+        response = self.client.patch(self.url, {"first_name": "X"})
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

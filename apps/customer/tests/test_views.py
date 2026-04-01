@@ -1,3 +1,6 @@
+import io
+
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from knox.models import AuthToken
 from rest_framework import status
@@ -161,6 +164,85 @@ class CustomerProfileTests(APITestCase):
         self.client.credentials()
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class CustomerProfileUpdateTests(APITestCase):
+    url = reverse("customer-profile")
+
+    def setUp(self):
+        self.customer = create_customer()
+        _, token = AuthToken.objects.create(self.customer)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+
+    def test_patch_updates_allowed_fields(self):
+        response = self.client.patch(
+            self.url,
+            {"first_name": "Updated", "last_name": "Name", "phone": "01099999999"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.first_name, "Updated")
+        self.assertEqual(self.customer.last_name, "Name")
+        self.assertEqual(self.customer.phone, "01099999999")
+
+    def test_patch_partial_updates_single_field(self):
+        response = self.client.patch(self.url, {"first_name": "Solo"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.first_name, "Solo")
+
+    def test_patch_address_and_coordinates(self):
+        response = self.client.patch(
+            self.url,
+            {
+                "address": "15 Tahrir St",
+                "latitude": "30.044420",
+                "longitude": "31.235712",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.address, "15 Tahrir St")
+
+    def test_patch_locked_fields_are_ignored(self):
+        original_email = self.customer.email
+        original_balance = self.customer.wallet_balance
+        self.client.patch(
+            self.url,
+            {"email": "hacked@test.com", "wallet_balance": "9999.00"},
+        )
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.email, original_email)
+        self.assertEqual(self.customer.wallet_balance, original_balance)
+
+    def test_patch_profile_picture_upload(self):
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (1, 1)).save(buf, format="PNG")
+        buf.seek(0)
+        image = SimpleUploadedFile("avatar.png", buf.read(), content_type="image/png")
+        response = self.client.patch(
+            self.url, {"profile_picture": image}, format="multipart"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.customer.refresh_from_db()
+        self.assertTrue(self.customer.profile_picture)
+
+    def test_put_not_allowed(self):
+        response = self.client.put(self.url, {"first_name": "X"})
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_patch_unauthenticated_returns_401(self):
+        self.client.credentials()
+        response = self.client.patch(self.url, {"first_name": "X"})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_provider_token_returns_403(self):
+        provider = create_provider(email="prov_patch@test.com")
+        self.client.force_authenticate(user=provider)
+        response = self.client.patch(self.url, {"first_name": "X"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

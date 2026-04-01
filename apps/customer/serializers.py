@@ -77,3 +77,19 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
             "date_joined",
         ]
         read_only_fields = fields
+
+
+class CustomerUpdateSerializer(serializers.ModelSerializer):
+    """PATCH /me/ — only non-sensitive profile fields."""
+
+    class Meta:
+        model = Customer
+        fields = [
+            "first_name",
+            "last_name",
+            "phone",
+            "profile_picture",
+            "address",
+            "latitude",
+            "longitude",
+        ]
