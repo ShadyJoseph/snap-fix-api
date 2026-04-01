@@ -1,7 +1,13 @@
+from django.http import Http404
 from knox.models import AuthToken
 from knox.views import LogoutView as KnoxLogoutView
 from rest_framework import generics, permissions, status
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from apps.provider.models import Provider
+from apps.provider.serializers import ProviderSerializer
 
 from .serializers import (
     CustomerLoginSerializer,
@@ -9,6 +15,12 @@ from .serializers import (
     CustomerRegisterSerializer,
     CustomerSerializer,
 )
+
+
+def get_customer_or_403(user):
+    if not hasattr(user, "customer"):
+        raise PermissionDenied("Only customers can access this endpoint.")
+    return user.customer
 
 
 class CustomerRegisterView(generics.CreateAPIView):
@@ -64,3 +76,51 @@ class CustomerProfileView(generics.RetrieveAPIView):
 
     def get_object(self):
         return self.request.user.customer  # type: ignore
+
+
+# ── Favorites ─────────────────────────────────────────────────
+
+
+class CustomerFavoriteToggleView(APIView):
+    """
+    POST /api/v1/customers/favorites/{provider_id}/toggle/
+
+    Adds or removes a provider from the customer's favorites.
+    Returns current state so the client knows which icon to show.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, provider_id):
+        customer = get_customer_or_403(request.user)
+
+        try:
+            provider = Provider.objects.get(pk=provider_id)
+        except Provider.DoesNotExist:
+            raise Http404 from None
+
+        if customer.favorite_providers.filter(pk=provider_id).exists():
+            customer.favorite_providers.remove(provider)
+            is_favorite = False
+        else:
+            customer.favorite_providers.add(provider)
+            is_favorite = True
+
+        return Response({"is_favorite": is_favorite, "provider_id": str(provider_id)})
+
+
+class CustomerFavoritesListView(generics.ListAPIView):
+    """
+    GET /api/v1/customers/favorites/
+
+    Returns the customer's favorited providers.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        return ProviderSerializer
+
+    def get_queryset(self):
+        customer = get_customer_or_403(self.request.user)
+        return customer.favorite_providers.all()

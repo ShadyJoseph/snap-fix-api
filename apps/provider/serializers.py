@@ -55,9 +55,10 @@ class ProviderLoginSerializer(serializers.Serializer):
 
 
 class ProviderSerializer(serializers.ModelSerializer):
-    """Minimal read-only serializer — used on login response."""
+    """Minimal read-only serializer — used on login response and booking views."""
 
     completion_rate = serializers.SerializerMethodField()
+    rating = serializers.FloatField(read_only=True)
 
     class Meta:
         model = Provider
@@ -71,7 +72,7 @@ class ProviderSerializer(serializers.ModelSerializer):
             "bio",
             "verification_status",
             "is_available",
-            "average_rating",
+            "rating",
             "total_reviews",
             "total_jobs",
             "completed_jobs",
@@ -92,6 +93,7 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
     """Full serializer for the authenticated provider's own profile (GET /me/)."""
 
     completion_rate = serializers.SerializerMethodField()
+    rating = serializers.FloatField(read_only=True)
 
     class Meta:
         model = Provider
@@ -111,7 +113,7 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
             "categories",
             "verification_status",
             "is_available",
-            "average_rating",
+            "rating",
             "total_reviews",
             "total_jobs",
             "completed_jobs",

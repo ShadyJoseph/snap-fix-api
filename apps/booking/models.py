@@ -311,3 +311,47 @@ class ServiceRequest(models.Model):
                 "updated_at",
             ]
         )
+
+
+class Review(models.Model):
+    """
+    One review per completed service request, written by the customer.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service_request = models.OneToOneField(
+        ServiceRequest,
+        on_delete=models.CASCADE,
+        related_name="review",
+    )
+    customer = models.ForeignKey(
+        "customer.Customer",
+        on_delete=models.CASCADE,
+        related_name="reviews",
+    )
+    provider = models.ForeignKey(
+        "provider.Provider",
+        on_delete=models.CASCADE,
+        related_name="reviews",
+    )
+    rating = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1)],
+        help_text="1-5 stars",
+    )
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "reviews"
+        verbose_name = "Review"
+        verbose_name_plural = "Reviews"
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(rating__gte=1) & models.Q(rating__lte=5),
+                name="rating_1_to_5",
+            )
+        ]
+
+    def __str__(self):
+        return f"Review #{str(self.service_request_id)[:8]} — {self.rating}★"

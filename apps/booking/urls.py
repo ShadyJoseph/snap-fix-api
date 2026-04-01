@@ -2,12 +2,17 @@ from django.urls import path
 
 from .views import (
     CustomerCancelView,
+    CustomerHistoryDetailView,
+    CustomerHistoryListView,
+    CustomerRateProviderView,
     CustomerRequestDetailView,
     CustomerRequestListCreateView,
     ProviderAcceptView,
     ProviderCancelView,
     ProviderCompleteView,
     ProviderDeclineView,
+    ProviderHistoryDetailView,
+    ProviderHistoryListView,
     ProviderIncomingRequestsView,
     ProviderOpenRequestsView,
     ProviderPickRequestView,
@@ -74,5 +79,31 @@ urlpatterns += [
         "requests/<uuid:pk>/pick/",
         ProviderPickRequestView.as_view(),
         name="request-pick",
+    ),
+    path(
+        "requests/<uuid:pk>/rate/",
+        CustomerRateProviderView.as_view(),
+        name="request-rate",
+    ),
+    # History
+    path(
+        "history/customer/",
+        CustomerHistoryListView.as_view(),
+        name="history-customer-list",
+    ),
+    path(
+        "history/customer/<uuid:pk>/",
+        CustomerHistoryDetailView.as_view(),
+        name="history-customer-detail",
+    ),
+    path(
+        "history/provider/",
+        ProviderHistoryListView.as_view(),
+        name="history-provider-list",
+    ),
+    path(
+        "history/provider/<uuid:pk>/",
+        ProviderHistoryDetailView.as_view(),
+        name="history-provider-detail",
     ),
 ]
