@@ -107,10 +107,34 @@ class BookingTestCase(APITestCase):
         return data.get("results", data) if isinstance(data, dict) else data
 
 
-# ── Customer: Create & List ───────────────────────────────────────────────────
+# ── Shared helpers ────────────────────────────────────────────────────────────
 
 
-class CustomerRequestListCreateTests(BookingTestCase):
+def make_completed_request(customer, provider, category, region, **kwargs):
+    """Create a service request already in COMPLETED state with a provider."""
+    sr = create_service_request(customer, category, region, **kwargs)
+    sr.status = ServiceRequestStatus.COMPLETED
+    sr.provider = provider
+    sr.save()
+    return sr
+
+
+def create_review(service_request, customer, provider, rating=4, comment="Good work"):
+    from apps.booking.models import Review
+
+    return Review.objects.create(
+        service_request=service_request,
+        customer=customer,
+        provider=provider,
+        rating=rating,
+        comment=comment,
+    )
+
+
+# ── Unified: List + Create ────────────────────────────────────────────────────
+
+
+class ServiceRequestListTests(BookingTestCase):
     url = reverse("request-list-create")
 
     def _valid_payload(self, **overrides):
@@ -126,6 +150,8 @@ class CustomerRequestListCreateTests(BookingTestCase):
         payload.update(overrides)
         return payload
 
+    # ── POST (customer only) ──────────────────────────────────
+
     def test_create_success_returns_pending(self):
         self.authenticate_customer()
         response = self.client.post(self.url, self._valid_payload())
@@ -134,15 +160,12 @@ class CustomerRequestListCreateTests(BookingTestCase):
         self.assertIn("id", response.data)
 
     def test_create_assigns_customer_from_token(self):
-        """Customer must come from the auth token, never from the request body."""
         self.authenticate_customer()
         response = self.client.post(self.url, self._valid_payload())
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         sr = ServiceRequest.objects.get(id=response.data["id"])
         self.assertEqual(sr.customer, self.customer)
 
     def test_create_by_provider_returns_403(self):
-        """Providers must not be able to create service requests."""
         self.authenticate_provider()
         response = self.client.post(self.url, self._valid_payload())
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -156,7 +179,9 @@ class CustomerRequestListCreateTests(BookingTestCase):
         response = self.client.post(self.url, {"title": "Incomplete"})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_list_returns_only_own_requests(self):
+    # ── GET — customer ────────────────────────────────────────
+
+    def test_customer_list_returns_own_requests_only(self):
         self.authenticate_customer()
         other = create_customer(email="other@test.com")
         self.make_request()
@@ -165,20 +190,83 @@ class CustomerRequestListCreateTests(BookingTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(self.get_results(response)), 1)
 
-    def test_list_by_provider_returns_403(self):
-        self.authenticate_provider()
+    def test_customer_list_empty_when_no_requests(self):
+        self.authenticate_customer()
         response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(len(self.get_results(response)), 0)
+
+    def test_customer_list_filter_by_status(self):
+        self.authenticate_customer()
+        self.make_request(title="Pending")
+        completed = make_completed_request(
+            self.customer, self.provider, self.category, self.region, title="Done"
+        )
+        response = self.client.get(self.url, {"status": ServiceRequestStatus.COMPLETED})
+        results = self.get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(str(results[0]["id"]), str(completed.id))
+
+    def test_customer_list_review_null_before_rating(self):
+        self.authenticate_customer()
+        self.make_request()
+        self.assertIsNone(self.get_results(self.client.get(self.url))[0]["review"])
+
+    def test_customer_list_review_populated_after_rating(self):
+        self.authenticate_customer()
+        sr = make_completed_request(
+            self.customer, self.provider, self.category, self.region
+        )
+        create_review(sr, self.customer, self.provider, rating=5)
+        result = next(
+            r
+            for r in self.get_results(self.client.get(self.url))
+            if str(r["id"]) == str(sr.id)
+        )
+        self.assertEqual(result["review"]["rating"], 5)
+
+    # ── GET — provider ────────────────────────────────────────
+
+    def test_provider_list_returns_own_jobs_only(self):
+        self.authenticate_provider()
+        assigned = self.assign_to_provider(self.make_request())
+        self.make_request(title="Unassigned")  # no provider → should NOT appear
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [str(r["id"]) for r in self.get_results(response)]
+        self.assertIn(str(assigned.id), ids)
+        self.assertEqual(len(ids), 1)
+
+    def test_provider_list_filter_by_status(self):
+        self.authenticate_provider()
+        self.set_status(
+            self.make_request(title="Active"),
+            ServiceRequestStatus.CONFIRMED,
+            provider=self.provider,
+        )
+        completed = make_completed_request(
+            self.customer, self.provider, self.category, self.region
+        )
+        response = self.client.get(self.url, {"status": ServiceRequestStatus.COMPLETED})
+        results = self.get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(str(results[0]["id"]), str(completed.id))
+
+    def test_provider_list_review_populated_after_rating(self):
+        self.authenticate_provider()
+        sr = make_completed_request(
+            self.customer, self.provider, self.category, self.region
+        )
+        create_review(sr, self.customer, self.provider, rating=3)
+        result = next(
+            r
+            for r in self.get_results(self.client.get(self.url))
+            if str(r["id"]) == str(sr.id)
+        )
+        self.assertEqual(result["review"]["rating"], 3)
 
     def test_list_unauthenticated_returns_401(self):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-    def test_list_empty_when_no_requests(self):
-        self.authenticate_customer()
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(self.get_results(response)), 0)
 
 
 # ── Customer: Detail ─────────────────────────────────────────────────────────
@@ -199,11 +287,19 @@ class CustomerRequestDetailTests(BookingTestCase):
         response = self.client.get(reverse("request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_get_by_provider_returns_403(self):
+    def test_provider_gets_404_for_unassigned_request(self):
+        # Pending request has no provider — provider queryset scopes to their jobs only
         sr = self.make_request()
         self.authenticate_provider()
         response = self.client.get(reverse("request-detail", args=[sr.id]))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_provider_can_access_own_assigned_job(self):
+        sr = self.assign_to_provider(self.make_request())
+        self.authenticate_provider()
+        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data["id"]), str(sr.id))
 
     def test_get_unauthenticated_returns_401(self):
         sr = self.make_request()
@@ -295,38 +391,6 @@ class ProviderIncomingTests(BookingTestCase):
         self.assertNotEqual(str(results[0]["id"]), str(other_sr.id))
 
     def test_customer_cannot_access_incoming(self):
-        self.authenticate_customer()
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_unauthenticated_returns_401(self):
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-# ── Provider: My Jobs ─────────────────────────────────────────────────────────
-
-
-class ProviderMyJobsTests(BookingTestCase):
-    url = reverse("request-my-jobs")
-
-    def test_returns_all_own_jobs_across_statuses(self):
-        self.authenticate_provider()
-        confirmed = self.make_request(title="Confirmed Job")
-        self.set_status(
-            confirmed, ServiceRequestStatus.CONFIRMED, provider=self.provider
-        )
-        completed = self.make_request(title="Completed Job")
-        self.set_status(
-            completed, ServiceRequestStatus.COMPLETED, provider=self.provider
-        )
-        self.make_request(title="Unassigned")  # should NOT appear
-
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(self.get_results(response)), 2)
-
-    def test_customer_cannot_access_my_jobs(self):
         self.authenticate_customer()
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -886,30 +950,6 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
         self.assertEqual(sr.provider, self.provider)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def make_completed_request(customer, provider, category, region, **kwargs):
-    """Create a service request already in COMPLETED state with a provider."""
-    sr = create_service_request(customer, category, region, **kwargs)
-    sr.status = ServiceRequestStatus.COMPLETED
-    sr.provider = provider
-    sr.save()
-    return sr
-
-
-def create_review(service_request, customer, provider, rating=4, comment="Good work"):
-    from apps.booking.models import Review
-
-    return Review.objects.create(
-        service_request=service_request,
-        customer=customer,
-        provider=provider,
-        rating=rating,
-        comment=comment,
-    )
-
-
 # ── Rating ────────────────────────────────────────────────────────────────────
 
 
@@ -995,78 +1035,16 @@ class CustomerRateProviderTests(BookingTestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
-# ── Customer History List ─────────────────────────────────────────────────────
+# ── History Detail (unified) ──────────────────────────────────────────────────
 
 
-class CustomerHistoryListTests(BookingTestCase):
-    url = reverse("history-customer-list")
-
-    def test_returns_own_requests_across_all_statuses(self):
-        self.authenticate_customer()
-        self.make_request(title="Pending")
-        make_completed_request(
-            self.customer, self.provider, self.category, self.region, title="Done"
-        )
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(self.get_results(response)), 2)
-
-    def test_does_not_return_other_customers_requests(self):
-        self.authenticate_customer()
-        other = create_customer(email="other3@test.com")
-        make_completed_request(other, self.provider, self.category, self.region)
-        response = self.client.get(self.url)
-        self.assertEqual(len(self.get_results(response)), 0)
-
-    def test_filter_by_status_completed(self):
-        self.authenticate_customer()
-        self.make_request(title="Pending")
-        make_completed_request(
-            self.customer, self.provider, self.category, self.region, title="Done"
-        )
-        response = self.client.get(self.url, {"status": ServiceRequestStatus.COMPLETED})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        results = self.get_results(response)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["status"], ServiceRequestStatus.COMPLETED)
-
-    def test_review_field_present_and_null_when_not_rated(self):
-        self.authenticate_customer()
-        make_completed_request(self.customer, self.provider, self.category, self.region)
-        response = self.client.get(self.url)
-        result = self.get_results(response)[0]
-        self.assertIn("review", result)
-        self.assertIsNone(result["review"])
-
-    def test_review_field_populated_after_rating(self):
-        self.authenticate_customer()
-        sr = make_completed_request(
-            self.customer, self.provider, self.category, self.region
-        )
-        create_review(sr, self.customer, self.provider, rating=5)
-        response = self.client.get(self.url)
-        result = self.get_results(response)[0]
-        self.assertIsNotNone(result["review"])
-        self.assertEqual(result["review"]["rating"], 5)
-
-    def test_provider_cannot_access(self):
-        self.authenticate_provider()
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_unauthenticated_returns_401(self):
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-# ── Customer History Detail ───────────────────────────────────────────────────
-
-
-class CustomerHistoryDetailTests(BookingTestCase):
+class HistoryDetailTests(BookingTestCase):
     def _detail_url(self, sr):
-        return reverse("history-customer-detail", args=[sr.id])
+        return reverse("history-detail", args=[sr.id])
 
-    def test_returns_full_detail_for_own_request(self):
+    # ── Customer perspective ──────────────────────────────────────────────────
+
+    def test_customer_gets_provider_card_and_review(self):
         self.authenticate_customer()
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
@@ -1095,7 +1073,7 @@ class CustomerHistoryDetailTests(BookingTestCase):
         response = self.client.get(self._detail_url(sr))
         self.assertTrue(response.data["is_favorite_provider"])
 
-    def test_review_null_before_rating(self):
+    def test_customer_review_null_before_rating(self):
         self.authenticate_customer()
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
@@ -1103,7 +1081,7 @@ class CustomerHistoryDetailTests(BookingTestCase):
         response = self.client.get(self._detail_url(sr))
         self.assertIsNone(response.data["review"])
 
-    def test_review_populated_after_rating(self):
+    def test_customer_review_populated_after_rating(self):
         self.authenticate_customer()
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
@@ -1113,98 +1091,16 @@ class CustomerHistoryDetailTests(BookingTestCase):
         self.assertEqual(response.data["review"]["rating"], 4)
         self.assertEqual(response.data["review"]["comment"], "Solid")
 
-    def test_other_customers_request_returns_404(self):
+    def test_customer_other_request_returns_404(self):
         other = create_customer(email="other4@test.com")
         sr = make_completed_request(other, self.provider, self.category, self.region)
         self.authenticate_customer()
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_provider_cannot_access(self):
-        self.authenticate_provider()
-        sr = make_completed_request(
-            self.customer, self.provider, self.category, self.region
-        )
-        response = self.client.get(self._detail_url(sr))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+    # ── Provider perspective ──────────────────────────────────────────────────
 
-    def test_unauthenticated_returns_401(self):
-        sr = make_completed_request(
-            self.customer, self.provider, self.category, self.region
-        )
-        response = self.client.get(self._detail_url(sr))
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-# ── Provider History List ─────────────────────────────────────────────────────
-
-
-class ProviderHistoryListTests(BookingTestCase):
-    url = reverse("history-provider-list")
-
-    def test_returns_own_jobs_across_all_statuses(self):
-        self.authenticate_provider()
-        self.set_status(
-            self.make_request(), ServiceRequestStatus.CONFIRMED, provider=self.provider
-        )
-        make_completed_request(self.customer, self.provider, self.category, self.region)
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(self.get_results(response)), 2)
-
-    def test_does_not_return_other_providers_jobs(self):
-        self.authenticate_provider()
-        other_provider = create_provider(email="other5@provider.com")
-        make_completed_request(
-            self.customer, other_provider, self.category, self.region
-        )
-        response = self.client.get(self.url)
-        self.assertEqual(len(self.get_results(response)), 0)
-
-    def test_filter_by_status_completed(self):
-        self.authenticate_provider()
-        self.set_status(
-            self.make_request(title="Active"),
-            ServiceRequestStatus.CONFIRMED,
-            provider=self.provider,
-        )
-        make_completed_request(
-            self.customer, self.provider, self.category, self.region, title="Done"
-        )
-        response = self.client.get(self.url, {"status": ServiceRequestStatus.COMPLETED})
-        results = self.get_results(response)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["status"], ServiceRequestStatus.COMPLETED)
-
-    def test_review_field_present(self):
-        self.authenticate_provider()
-        sr = make_completed_request(
-            self.customer, self.provider, self.category, self.region
-        )
-        create_review(sr, self.customer, self.provider, rating=3)
-        response = self.client.get(self.url)
-        result = self.get_results(response)[0]
-        self.assertIn("review", result)
-        self.assertEqual(result["review"]["rating"], 3)
-
-    def test_customer_cannot_access(self):
-        self.authenticate_customer()
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_unauthenticated_returns_401(self):
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-# ── Provider History Detail ───────────────────────────────────────────────────
-
-
-class ProviderHistoryDetailTests(BookingTestCase):
-    def _detail_url(self, sr):
-        return reverse("history-provider-detail", args=[sr.id])
-
-    def test_returns_full_detail_for_own_job(self):
+    def test_provider_gets_customer_card_and_review(self):
         self.authenticate_provider()
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
@@ -1215,7 +1111,7 @@ class ProviderHistoryDetailTests(BookingTestCase):
         self.assertIn("customer", response.data)
         self.assertIn("review", response.data)
 
-    def test_review_null_when_not_rated(self):
+    def test_provider_review_null_when_not_rated(self):
         self.authenticate_provider()
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
@@ -1223,7 +1119,7 @@ class ProviderHistoryDetailTests(BookingTestCase):
         response = self.client.get(self._detail_url(sr))
         self.assertIsNone(response.data["review"])
 
-    def test_review_populated_after_customer_rates(self):
+    def test_provider_review_populated_after_customer_rates(self):
         self.authenticate_provider()
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
@@ -1232,7 +1128,7 @@ class ProviderHistoryDetailTests(BookingTestCase):
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.data["review"]["rating"], 2)
 
-    def test_other_providers_job_returns_404(self):
+    def test_provider_other_job_returns_404(self):
         other_provider = create_provider(email="other6@provider.com")
         sr = make_completed_request(
             self.customer, other_provider, self.category, self.region
@@ -1241,13 +1137,17 @@ class ProviderHistoryDetailTests(BookingTestCase):
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_customer_cannot_access(self):
-        self.authenticate_customer()
+    # ── Cross-role isolation ──────────────────────────────────────────────────
+
+    def test_provider_token_on_customer_request_returns_404(self):
+        # Provider queries are scoped to their assigned jobs — customer's request is invisible
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
         )
+        other_provider = create_provider(email="cross@provider.com")
+        self.client.force_authenticate(user=other_provider)
         response = self.client.get(self._detail_url(sr))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_unauthenticated_returns_401(self):
         sr = make_completed_request(

@@ -295,22 +295,28 @@ Returned by all booking action endpoints (accept, start, etc.).
 "started_at": null,
 "completed_at": null,
 "cancelled_at": null,
-"declined_at": null
+"declined_at": null,
+"review": null
 }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOOKING — CUSTOMER ENDPOINTS
+BOOKING — REQUEST ENDPOINTS  (token-aware, both roles)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 GET /api/v1/bookings/requests/
+    ?status=<status>    (optional — e.g. completed, pending, cancelled)
 
-    Returns all requests belonging to the authenticated customer.
+    Role-aware list. The token determines what is returned:
+      Customer → their own service requests.
+      Provider → jobs assigned to them.
 
-    Response 200 (paginated): { "count": 1, "results": [ <SR>, ... ] }
+    Each item includes a "review" field (null until rated).
+
+    Response 200 (paginated): { "count": N, "results": [ <SR>, ... ] }
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/
+POST /api/v1/bookings/requests/   [customer token only]
 
     Creates a new service request. Status starts as pending.
     Customer is taken from the auth token — never from the body.
@@ -331,19 +337,22 @@ POST /api/v1/bookings/requests/
     }
 
     Response 201: <ServiceRequest>
+    Response 403: provider token used
 
 ────────────────────────────────────────────────────────
 
 GET /api/v1/bookings/requests/<id>/
 
-    Customer can only access their own requests.
+    Role-aware detail.
+      Customer → scoped to their own requests.
+      Provider → scoped to jobs assigned to them.
 
     Response 200: <ServiceRequest>
-    Response 404: not found or belongs to another customer
+    Response 404: not found or not owned by caller
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/cancel/
+POST /api/v1/bookings/requests/<id>/cancel/   [customer token]
 
     Allowed from: pending, assigned, confirmed, in_progress.
 
@@ -354,7 +363,7 @@ POST /api/v1/bookings/requests/<id>/cancel/
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/rate/
+POST /api/v1/bookings/requests/<id>/rate/   [customer token]
 
     Customer rates the provider after a completed job.
     One review per service request. Submitting twice returns
@@ -381,10 +390,10 @@ POST /api/v1/bookings/requests/<id>/rate/
     }
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOOKING — PROVIDER ENDPOINTS
+BOOKING — PROVIDER POOL & ACTIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-GET /api/v1/bookings/requests/open/
+GET /api/v1/bookings/requests/open/   [provider token]
 
     All pending requests available for self-assignment.
     Urgent requests appear first, then newest first.
@@ -393,7 +402,16 @@ GET /api/v1/bookings/requests/open/
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/pick/
+GET /api/v1/bookings/requests/incoming/   [provider token]
+
+    Requests assigned to this provider awaiting accept/decline.
+    Ordered by assigned_at descending.
+
+    Response 200 (paginated): { "count": 1, "results": [ <SR>, ... ] }
+
+────────────────────────────────────────────────────────
+
+POST /api/v1/bookings/requests/<id>/pick/   [provider token]
 
     Provider self-assigns a pending request.
     Transition: pending → assigned.
@@ -411,24 +429,7 @@ POST /api/v1/bookings/requests/<id>/pick/
 
 ────────────────────────────────────────────────────────
 
-GET /api/v1/bookings/requests/incoming/
-
-    Requests assigned to this provider awaiting accept/decline.
-    Ordered by assigned_at descending.
-
-    Response 200 (paginated): { "count": 1, "results": [ <SR>, ... ] }
-
-────────────────────────────────────────────────────────
-
-GET /api/v1/bookings/requests/my-jobs/
-
-    All of this provider's jobs across every status.
-
-    Response 200 (paginated): { "count": 5, "results": [ <SR>, ... ] }
-
-────────────────────────────────────────────────────────
-
-POST /api/v1/bookings/requests/<id>/accept/
+POST /api/v1/bookings/requests/<id>/accept/   [provider token]
 
     Transition: assigned → confirmed.
 
@@ -439,7 +440,7 @@ POST /api/v1/bookings/requests/<id>/accept/
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/decline/
+POST /api/v1/bookings/requests/<id>/decline/   [provider token]
 
     Transition: assigned → pending.
     Request returns to the open pool for reassignment.
@@ -451,7 +452,7 @@ POST /api/v1/bookings/requests/<id>/decline/
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/start/
+POST /api/v1/bookings/requests/<id>/start/   [provider token]
 
     Transition: confirmed → in_progress.
 
@@ -462,7 +463,7 @@ POST /api/v1/bookings/requests/<id>/start/
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/complete/
+POST /api/v1/bookings/requests/<id>/complete/   [provider token]
 
     Transition: in_progress → completed.
     Provider stats (completed_jobs, total_earnings,
@@ -476,7 +477,7 @@ POST /api/v1/bookings/requests/<id>/complete/
 
 ────────────────────────────────────────────────────────
 
-POST /api/v1/bookings/requests/<id>/provider-cancel/
+POST /api/v1/bookings/requests/<id>/provider-cancel/   [provider token]
 
     Provider cancels. Rolls back total_jobs if the request
     was in assigned, confirmed, or in_progress.
@@ -487,49 +488,21 @@ POST /api/v1/bookings/requests/<id>/provider-cancel/
     Response 400: already completed, cancelled, or declined
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BOOKING — HISTORY ENDPOINTS
+BOOKING — HISTORY DETAIL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-History endpoints return all requests regardless of status.
-Use the ?status= filter to narrow results.
+GET /api/v1/bookings/history/<id>/
 
-────────────────────────────────────────────────────────
+    Full detail for a single booking. Token role determines
+    which serializer is used and what is visible:
 
-GET /api/v1/bookings/history/customer/
-?status=completed (optional filter)
+      Customer token → provider card + is_favorite_provider + review.
+      Provider token → customer card + review.
 
-    Customer's full booking history. Ordered newest first.
+    Use the list endpoint (GET /requests/) to browse all bookings,
+    then this endpoint to load the full detail screen.
 
-    Response 200 (paginated):
-    {
-        "count": 10,
-        "results": [
-            {
-                "id":           "uuid",
-                "title":        "Leaking pipe",
-                "category":     { "id": 1, "name": "Plumbing" },
-                "status":       "completed",
-                "status_display": "Completed",
-                "preferred_date": "2025-08-01",
-                "preferred_time": "10:00:00",
-                "final_price":  "150.00",
-                "created_at":   "2025-07-20T08:00:00Z",
-                "completed_at": "2025-08-01T12:00:00Z",
-                "review": null  | { "id": "uuid", "rating": 5, "comment": "...", "created_at": "..." }
-            },
-            ...
-        ]
-    }
-
-────────────────────────────────────────────────────────
-
-GET /api/v1/bookings/history/customer/<id>/
-
-    Full detail for a single booking from the customer's view.
-    Includes the provider card, the review, and is_favorite_provider.
-    Drives both the post-completion popup and the history detail screen.
-
-    Response 200:
+    Response 200 (customer token):
     {
         "id":                 "uuid",
         "status":             "completed",
@@ -554,57 +527,20 @@ GET /api/v1/bookings/history/customer/<id>/
         "started_at":         "2025-08-01T09:30:00Z",
         "completed_at":       "2025-08-01T12:00:00Z",
         "provider": {
-            "id":               "uuid",
-            "first_name":       "Mohamed",
-            "last_name":        "Ali",
-            "business_name":    "Ali Fixes",
-            "rating":           4.75,
-            "total_reviews":    20,
-            "completion_rate":  92.0,
+            "id":              "uuid",
+            "first_name":      "Mohamed",
+            "last_name":       "Ali",
+            "business_name":   "Ali Fixes",
+            "rating":          4.75,
+            "total_reviews":   20,
+            "completion_rate": 92.0,
             ...
         },
         "review": null | { "id": "uuid", "rating": 5, "comment": "...", "created_at": "..." },
         "is_favorite_provider": false
     }
 
-    Response 404: not found or belongs to another customer
-
-────────────────────────────────────────────────────────
-
-GET /api/v1/bookings/history/provider/
-?status=completed (optional filter)
-
-    Provider's full job history. Ordered newest first.
-
-    Response 200 (paginated):
-    {
-        "count": 10,
-        "results": [
-            {
-                "id":           "uuid",
-                "title":        "Leaking pipe",
-                "category":     { "id": 1, "name": "Plumbing" },
-                "status":       "completed",
-                "status_display": "Completed",
-                "preferred_date": "2025-08-01",
-                "preferred_time": "10:00:00",
-                "final_price":  "150.00",
-                "created_at":   "2025-07-20T08:00:00Z",
-                "completed_at": "2025-08-01T12:00:00Z",
-                "review": null  | { "id": "uuid", "rating": 5, "comment": "...", "created_at": "..." }
-            },
-            ...
-        ]
-    }
-
-────────────────────────────────────────────────────────
-
-GET /api/v1/bookings/history/provider/<id>/
-
-    Full detail for a single job from the provider's view.
-    Includes the customer card and the review left for this job.
-
-    Response 200:
+    Response 200 (provider token):
     {
         "id":             "uuid",
         "status":         "completed",
@@ -627,16 +563,16 @@ GET /api/v1/bookings/history/provider/<id>/
         "started_at":     "2025-08-01T09:30:00Z",
         "completed_at":   "2025-08-01T12:00:00Z",
         "customer": {
-            "id":           "uuid",
-            "first_name":   "Shady",
-            "last_name":    "Abadeer",
+            "id":             "uuid",
+            "first_name":     "Shady",
+            "last_name":      "Abadeer",
             "total_bookings": 5,
             ...
         },
         "review": null | { "id": "uuid", "rating": 5, "comment": "...", "created_at": "..." }
     }
 
-    Response 404: not found or belongs to another provider
+    Response 404: not found or not owned by caller
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STATUS REFERENCE

@@ -7,6 +7,20 @@ from apps.provider.serializers import ProviderSerializer
 from .models import Review, ServiceRequest
 
 
+class ReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Review
+        fields = ["id", "rating", "comment", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+
+class ReviewCreateSerializer(serializers.Serializer):
+    """Customer submits rating + optional comment."""
+
+    rating = serializers.IntegerField(min_value=1, max_value=5)
+    comment = serializers.CharField(required=False, allow_blank=True)
+
+
 class ServiceRequestCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceRequest
@@ -33,7 +47,7 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
 
 
 class ServiceRequestSerializer(serializers.ModelSerializer):
-    """Full read serializer — used for detail and list views."""
+    """Full read serializer — used for list and action responses."""
 
     category = CategorySerializer(read_only=True)
     region = RegionSerializer(read_only=True)
@@ -41,6 +55,7 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
     cancelled_by_display = serializers.CharField(
         source="get_cancelled_by_display", read_only=True
     )
+    review = ReviewSerializer(read_only=True)
 
     class Meta:
         model = ServiceRequest
@@ -71,6 +86,7 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             "completed_at",
             "cancelled_at",
             "declined_at",
+            "review",
         ]
 
 
@@ -92,50 +108,6 @@ class ServiceRequestDeclineSerializer(serializers.Serializer):
     """Provider declines with an optional reason."""
 
     reason = serializers.CharField(required=False, allow_blank=True)
-
-
-# ── Review ────────────────────────────────────────────────────
-
-
-class ReviewSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Review
-        fields = ["id", "rating", "comment", "created_at"]
-        read_only_fields = ["id", "created_at"]
-
-
-class ReviewCreateSerializer(serializers.Serializer):
-    """Customer submits rating + optional comment."""
-
-    rating = serializers.IntegerField(min_value=1, max_value=5)
-    comment = serializers.CharField(required=False, allow_blank=True)
-
-
-# ── History list item (lightweight) ──────────────────────────
-
-
-class ServiceRequestHistorySerializer(serializers.ModelSerializer):
-    """Compact card for history lists."""
-
-    category = CategorySerializer(read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)
-    review = ReviewSerializer(read_only=True)  # null if not yet rated
-
-    class Meta:
-        model = ServiceRequest
-        fields = [
-            "id",
-            "title",
-            "category",
-            "status",
-            "status_display",
-            "preferred_date",
-            "preferred_time",
-            "final_price",
-            "created_at",
-            "completed_at",
-            "review",
-        ]
 
 
 # ── History detail (full, role-aware) ────────────────────────

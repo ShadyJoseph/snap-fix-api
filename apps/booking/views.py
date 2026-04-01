@@ -18,7 +18,6 @@ from .serializers import (
     ServiceRequestCompleteSerializer,
     ServiceRequestCreateSerializer,
     ServiceRequestDeclineSerializer,
-    ServiceRequestHistorySerializer,
     ServiceRequestSerializer,
 )
 
@@ -55,13 +54,16 @@ def get_provider_or_403(user):
     return user.provider
 
 
-# ── Customer Views ───────────────────────────────────────────
+# ── Unified Request Views ─────────────────────────────────────
 
 
-class CustomerRequestListCreateView(generics.ListCreateAPIView):
+class ServiceRequestListView(generics.ListCreateAPIView):
     """
-    GET  /api/v1/bookings/requests/   — customer's own requests
-    POST /api/v1/bookings/requests/   — create a new request (customers only)
+    GET  /api/v1/bookings/requests/
+         Customer → their own requests.
+         Provider → their own jobs.
+         Both support ?status= filter.
+    POST /api/v1/bookings/requests/  — customer only.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -72,31 +74,48 @@ class CustomerRequestListCreateView(generics.ListCreateAPIView):
         return ServiceRequestSerializer
 
     def get_queryset(self):
-        customer = get_customer_or_403(self.request.user)
-        return (
-            ServiceRequest.objects.filter(customer=customer)
-            .select_related("category", "region", "provider")
-            .order_by("-created_at")
-        )
+        user = self.request.user
+        if hasattr(user, "customer"):
+            qs = ServiceRequest.objects.filter(customer=user.customer).select_related(
+                "category", "region", "provider", "review"
+            )
+        elif hasattr(user, "provider"):
+            qs = ServiceRequest.objects.filter(provider=user.provider).select_related(
+                "category", "region", "customer", "review"
+            )
+        else:
+            return ServiceRequest.objects.none()
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        return qs.order_by("-created_at")
 
     def perform_create(self, serializer):
         customer = get_customer_or_403(self.request.user)
         serializer.save(customer=customer)
 
 
-class CustomerRequestDetailView(generics.RetrieveAPIView):
+class ServiceRequestDetailView(generics.RetrieveAPIView):
     """
-    GET /api/v1/bookings/requests/{id}/
+    GET /api/v1/bookings/requests/<id>/
+    Customer → scoped to their requests.
+    Provider → scoped to their assigned jobs.
     """
 
     serializer_class = ServiceRequestSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        customer = get_customer_or_403(self.request.user)
-        return ServiceRequest.objects.filter(customer=customer).select_related(
-            "category", "region", "provider"
-        )
+        user = self.request.user
+        if hasattr(user, "customer"):
+            return ServiceRequest.objects.filter(customer=user.customer).select_related(
+                "category", "region", "provider", "review"
+            )
+        if hasattr(user, "provider"):
+            return ServiceRequest.objects.filter(provider=user.provider).select_related(
+                "category", "region", "customer", "review"
+            )
+        return ServiceRequest.objects.none()
 
 
 class CustomerCancelView(APIView):
@@ -145,24 +164,6 @@ class ProviderIncomingRequestsView(generics.ListAPIView):
             )
             .select_related("category", "region", "customer")
             .order_by("-assigned_at")
-        )
-
-
-class ProviderRequestListView(generics.ListAPIView):
-    """
-    GET /api/v1/bookings/requests/my-jobs/
-    All provider jobs across all statuses.
-    """
-
-    serializer_class = ServiceRequestSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        provider = get_provider_or_403(self.request.user)
-        return (
-            ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "customer")
-            .order_by("-created_at")
         )
 
 
@@ -364,94 +365,36 @@ class CustomerRateProviderView(APIView):
         return Response(ReviewSerializer(review).data, status=status.HTTP_201_CREATED)
 
 
-# ── Customer History ──────────────────────────────────────────
+# ── Unified History Detail ────────────────────────────────────
 
 
-class CustomerHistoryListView(generics.ListAPIView):
+class HistoryDetailView(generics.RetrieveAPIView):
     """
-    GET /api/v1/bookings/history/customer/
-    ?status=completed  — filter by status (optional)
+    GET /api/v1/bookings/history/<id>/
 
-    Paginated history list for the customer.
+    Full detail — token role determines the serializer and ownership scope.
+    Customer → provider card + is_favorite_provider + review.
+    Provider → customer card + review.
     """
 
-    serializer_class = ServiceRequestHistorySerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        customer = get_customer_or_403(self.request.user)
-        qs = (
-            ServiceRequest.objects.filter(customer=customer)
-            .select_related("category", "region", "provider")
-            .select_related("review")
-            .order_by("-created_at")
-        )
-        status_filter = self.request.query_params.get("status")
-        if status_filter:
-            qs = qs.filter(status=status_filter)
-        return qs
-
-
-class CustomerHistoryDetailView(generics.RetrieveAPIView):
-    """
-    GET /api/v1/bookings/history/customer/{id}/
-
-    Full detail view — includes provider card, review, and is_favorite flag.
-    Drives both the post-completion popup and the history detail screen.
-    """
-
-    serializer_class = CustomerRequestDetailSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    def get_serializer_class(self):
+        user = self.request.user
+        if hasattr(user, "customer"):
+            return CustomerRequestDetailSerializer
+        if hasattr(user, "provider"):
+            return ProviderRequestDetailSerializer
+        raise PermissionDenied("Must be a customer or provider.")
 
     def get_queryset(self):
-        customer = get_customer_or_403(self.request.user)
-        return (
-            ServiceRequest.objects.filter(customer=customer)
-            .select_related("category", "region", "provider")
-            .select_related("review")
-        )
-
-
-# ── Provider History ──────────────────────────────────────────
-
-
-class ProviderHistoryListView(generics.ListAPIView):
-    """
-    GET /api/v1/bookings/history/provider/
-    ?status=completed  — filter by status (optional)
-    """
-
-    serializer_class = ServiceRequestHistorySerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        provider = get_provider_or_403(self.request.user)
-        qs = (
-            ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "customer")
-            .select_related("review")
-            .order_by("-created_at")
-        )
-        status_filter = self.request.query_params.get("status")
-        if status_filter:
-            qs = qs.filter(status=status_filter)
-        return qs
-
-
-class ProviderHistoryDetailView(generics.RetrieveAPIView):
-    """
-    GET /api/v1/bookings/history/provider/{id}/
-
-    Full detail — includes customer card and the review left for this job.
-    """
-
-    serializer_class = ProviderRequestDetailSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_queryset(self):
-        provider = get_provider_or_403(self.request.user)
-        return (
-            ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "customer")
-            .select_related("review")
-        )
+        user = self.request.user
+        if hasattr(user, "customer"):
+            return ServiceRequest.objects.filter(customer=user.customer).select_related(
+                "category", "region", "provider", "review"
+            )
+        if hasattr(user, "provider"):
+            return ServiceRequest.objects.filter(provider=user.provider).select_related(
+                "category", "region", "customer", "review"
+            )
+        return ServiceRequest.objects.none()

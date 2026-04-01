@@ -2,51 +2,53 @@ from django.urls import path
 
 from .views import (
     CustomerCancelView,
-    CustomerHistoryDetailView,
-    CustomerHistoryListView,
     CustomerRateProviderView,
-    CustomerRequestDetailView,
-    CustomerRequestListCreateView,
+    HistoryDetailView,
     ProviderAcceptView,
     ProviderCancelView,
     ProviderCompleteView,
     ProviderDeclineView,
-    ProviderHistoryDetailView,
-    ProviderHistoryListView,
     ProviderIncomingRequestsView,
     ProviderOpenRequestsView,
     ProviderPickRequestView,
-    ProviderRequestListView,
     ProviderStartView,
+    ServiceRequestDetailView,
+    ServiceRequestListView,
 )
 
-# Customer
 urlpatterns = [
+    # ── Unified list + create ─────────────────────────────────
+    path("requests/", ServiceRequestListView.as_view(), name="request-list-create"),
+    # ── Unified detail ────────────────────────────────────────
     path(
-        "requests/", CustomerRequestListCreateView.as_view(), name="request-list-create"
+        "requests/<uuid:pk>/", ServiceRequestDetailView.as_view(), name="request-detail"
     ),
-    path(
-        "requests/<uuid:pk>/",
-        CustomerRequestDetailView.as_view(),
-        name="request-detail",
-    ),
+    # ── Customer actions ──────────────────────────────────────
     path(
         "requests/<uuid:pk>/cancel/",
         CustomerCancelView.as_view(),
         name="request-cancel",
     ),
-]
-
-# Provider
-urlpatterns += [
+    path(
+        "requests/<uuid:pk>/rate/",
+        CustomerRateProviderView.as_view(),
+        name="request-rate",
+    ),
+    # ── Provider: pool + self-assign ──────────────────────────
+    path(
+        "requests/open/", ProviderOpenRequestsView.as_view(), name="request-open-pool"
+    ),
     path(
         "requests/incoming/",
         ProviderIncomingRequestsView.as_view(),
         name="request-incoming",
     ),
     path(
-        "requests/my-jobs/", ProviderRequestListView.as_view(), name="request-my-jobs"
+        "requests/<uuid:pk>/pick/",
+        ProviderPickRequestView.as_view(),
+        name="request-pick",
     ),
+    # ── Provider: FSM actions ─────────────────────────────────
     path(
         "requests/<uuid:pk>/accept/",
         ProviderAcceptView.as_view(),
@@ -70,40 +72,6 @@ urlpatterns += [
         ProviderCancelView.as_view(),
         name="request-provider-cancel",
     ),
-    path(
-        "requests/open/",
-        ProviderOpenRequestsView.as_view(),
-        name="request-open-pool",
-    ),
-    path(
-        "requests/<uuid:pk>/pick/",
-        ProviderPickRequestView.as_view(),
-        name="request-pick",
-    ),
-    path(
-        "requests/<uuid:pk>/rate/",
-        CustomerRateProviderView.as_view(),
-        name="request-rate",
-    ),
-    # History
-    path(
-        "history/customer/",
-        CustomerHistoryListView.as_view(),
-        name="history-customer-list",
-    ),
-    path(
-        "history/customer/<uuid:pk>/",
-        CustomerHistoryDetailView.as_view(),
-        name="history-customer-detail",
-    ),
-    path(
-        "history/provider/",
-        ProviderHistoryListView.as_view(),
-        name="history-provider-list",
-    ),
-    path(
-        "history/provider/<uuid:pk>/",
-        ProviderHistoryDetailView.as_view(),
-        name="history-provider-detail",
-    ),
+    # ── Unified history detail ────────────────────────────────
+    path("history/<uuid:pk>/", HistoryDetailView.as_view(), name="history-detail"),
 ]
