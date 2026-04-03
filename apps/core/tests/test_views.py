@@ -41,7 +41,7 @@ def get_results(response):
 
 
 class CategoryListTests(APITestCase):
-    url = reverse("category-list")
+    url = reverse("core:category-list")
 
     def setUp(self):
         Category.objects.all().delete()
@@ -82,7 +82,7 @@ class CategoryListTests(APITestCase):
 
 
 class RegionListTests(APITestCase):
-    url = reverse("region-list")
+    url = reverse("core:region-list")
 
     def setUp(self):
         Region.objects.all().delete()
@@ -152,7 +152,7 @@ def create_office(region, **kwargs):
 
 
 class OfficeListTests(APITestCase):
-    url = reverse("office-list")
+    url = reverse("core:office-list")
 
     def setUp(self):
         Office.objects.all().delete()
@@ -207,7 +207,7 @@ class OfficeDetailTests(APITestCase):
         Office.objects.all().delete()
         self.region = create_region()
         self.office = create_office(self.region)
-        self.url = reverse("office-detail", kwargs={"id": self.office.id})
+        self.url = reverse("core:office-detail", kwargs={"id": self.office.id})
 
     def test_returns_office(self):
         response = self.client.get(self.url)
@@ -251,7 +251,7 @@ class OfficeDetailTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_nonexistent_office_returns_404(self):
-        url = reverse("office-detail", kwargs={"id": uuid.uuid4()})
+        url = reverse("core:office-detail", kwargs={"id": uuid.uuid4()})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 

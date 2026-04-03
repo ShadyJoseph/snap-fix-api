@@ -8,7 +8,6 @@ class ServiceRequestStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "In Progress"
     COMPLETED = "completed", "Completed"
     CANCELLED = "cancelled", "Cancelled"
-    DECLINED = "declined", "Declined"
 
 
 class CancelledBy(models.TextChoices):

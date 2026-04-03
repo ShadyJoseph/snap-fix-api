@@ -1,7 +1,8 @@
 import uuid
 
+from django.contrib.gis.db import models
 from django.core.validators import MinValueValidator
-from django.db import models, transaction
+from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -46,11 +47,21 @@ class ServiceRequest(models.Model):
         related_name="service_requests",
     )
     address = models.TextField(help_text="Exact service address")
-    latitude = models.DecimalField(
-        max_digits=9, decimal_places=6, null=True, blank=True
+    location = models.PointField(
+        geography=True,
+        srid=4326,
+        help_text="Exact pin-drop location (longitude, latitude)",
     )
-    longitude = models.DecimalField(
-        max_digits=9, decimal_places=6, null=True, blank=True
+    floor_number = models.CharField(
+        max_length=20,
+        help_text="Floor number (e.g. 3, Ground, Basement)",
+    )
+    apartment_number = models.CharField(
+        max_length=20,
+        help_text="Apartment or unit number",
+    )
+    special_mark = models.TextField(
+        help_text="Landmark or navigation instructions for the provider",
     )
 
     # --- Description ---
@@ -152,7 +163,6 @@ class ServiceRequest(models.Model):
         return self.status not in (
             ServiceRequestStatus.COMPLETED,
             ServiceRequestStatus.CANCELLED,
-            ServiceRequestStatus.DECLINED,
         )
 
     def can_decline(self):
@@ -302,12 +312,14 @@ class ServiceRequest(models.Model):
         self.provider = None
         self.assigned_at = None
         self.decline_reason = reason
+        self.declined_at = timezone.now()
         self.save(
             update_fields=[
                 "status",
                 "provider",
                 "assigned_at",
                 "decline_reason",
+                "declined_at",
                 "updated_at",
             ]
         )

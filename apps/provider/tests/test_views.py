@@ -42,7 +42,7 @@ def create_provider(active=True, verified=True, **kwargs):
 
 
 class ProviderRegisterTests(APITestCase):
-    url = reverse("provider-register")
+    url = reverse("providers:provider-register")
 
     def test_register_success(self):
         payload = {
@@ -109,7 +109,7 @@ class ProviderRegisterTests(APITestCase):
 
 
 class ProviderLoginTests(APITestCase):
-    url = reverse("provider-login")
+    url = reverse("providers:provider-login")
 
     def setUp(self):
         self.provider = create_provider(
@@ -192,7 +192,7 @@ class ProviderLoginTests(APITestCase):
 
 
 class ProviderLogoutTests(APITestCase):
-    url = reverse("provider-logout")
+    url = reverse("providers:provider-logout")
 
     def setUp(self):
         self.provider = create_provider()
@@ -214,7 +214,7 @@ class ProviderLogoutTests(APITestCase):
 
 
 class ProviderProfileTests(APITestCase):
-    url = reverse("provider-profile")
+    url = reverse("providers:provider-profile")
 
     def setUp(self):
         self.provider = create_provider()
@@ -240,7 +240,7 @@ class ProviderProfileTests(APITestCase):
 
 
 class ProviderProfileUpdateTests(APITestCase):
-    url = reverse("provider-profile")
+    url = reverse("providers:provider-profile")
 
     def setUp(self):
         self.provider = create_provider()

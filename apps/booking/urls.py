@@ -16,6 +16,8 @@ from .views import (
     ServiceRequestListView,
 )
 
+app_name = "bookings"
+
 urlpatterns = [
     # ── Unified list + create ─────────────────────────────────
     path("requests/", ServiceRequestListView.as_view(), name="request-list-create"),

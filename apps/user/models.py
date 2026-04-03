@@ -4,7 +4,7 @@ from django.contrib.auth.models import (
     AbstractBaseUser,
     PermissionsMixin,
 )
-from django.db import models
+from django.contrib.gis.db import models
 from django.utils import timezone
 
 from .managers import UserManager
@@ -24,11 +24,12 @@ class User(AbstractBaseUser, PermissionsMixin):
         upload_to="profile_pictures/", blank=True, null=True
     )
     address = models.TextField(blank=True)
-    latitude = models.DecimalField(
-        max_digits=9, decimal_places=6, blank=True, null=True
-    )
-    longitude = models.DecimalField(
-        max_digits=9, decimal_places=6, blank=True, null=True
+    location = models.PointField(
+        geography=True,
+        null=True,
+        blank=True,
+        srid=4326,
+        help_text="User's current location (longitude, latitude)",
     )
 
     # Status fields

@@ -1,3 +1,6 @@
+import uuid
+
+from django.contrib.gis.geos import Point
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -10,6 +13,9 @@ from apps.provider.choices import ProviderVerificationStatus
 from apps.provider.models import Provider
 
 TEST_PASSWORD = "testpass123"  # noqa: S105
+
+# Default pin-drop used by test factories (Cairo city centre).
+_CAIRO = Point(31.2357, 30.0444, srid=4326)
 
 
 # ── Factories ─────────────────────────────────────────────────────────────────
@@ -57,6 +63,10 @@ def create_service_request(customer, category, region, **kwargs):
         "title": "Fix leaking pipe",
         "description": "Pipe under sink is leaking",
         "address": "123 Test St",
+        "floor_number": "3",
+        "apartment_number": "12",
+        "special_mark": "Blue door on the left",
+        "location": _CAIRO,
         "preferred_date": "2026-06-01",
         "preferred_time": "10:00:00",
         "is_urgent": False,
@@ -76,6 +86,8 @@ class BookingTestCase(APITestCase):
         self.provider = create_provider()
         self.category = create_category()
         self.region = create_region()
+        # Provider must have the category to see/pick matching requests.
+        self.provider.categories.add(self.category)
 
     def authenticate_customer(self):
         self.client.force_authenticate(user=self.customer)
@@ -135,13 +147,18 @@ def create_review(service_request, customer, provider, rating=4, comment="Good w
 
 
 class ServiceRequestListTests(BookingTestCase):
-    url = reverse("request-list-create")
+    url = reverse("bookings:request-list-create")
 
     def _valid_payload(self, **overrides):
         payload = {
             "category": self.category.id,
             "region": self.region.id,
             "address": "123 Test St",
+            "floor_number": "3",
+            "apartment_number": "12",
+            "special_mark": "Blue door on the left",
+            "latitude": 30.0444,
+            "longitude": 31.2357,
             "title": "Fix leaking pipe",
             "description": "Pipe under sink is leaking",
             "preferred_date": "2026-06-01",
@@ -276,7 +293,7 @@ class CustomerRequestDetailTests(BookingTestCase):
     def test_get_own_request_success(self):
         self.authenticate_customer()
         sr = self.make_request()
-        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(str(response.data["id"]), str(sr.id))
 
@@ -284,26 +301,26 @@ class CustomerRequestDetailTests(BookingTestCase):
         other = create_customer(email="other@test.com")
         sr = create_service_request(other, self.category, self.region)
         self.authenticate_customer()
-        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_provider_gets_404_for_unassigned_request(self):
         # Pending request has no provider — provider queryset scopes to their jobs only
         sr = self.make_request()
         self.authenticate_provider()
-        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_provider_can_access_own_assigned_job(self):
         sr = self.assign_to_provider(self.make_request())
         self.authenticate_provider()
-        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(str(response.data["id"]), str(sr.id))
 
     def test_get_unauthenticated_returns_401(self):
         sr = self.make_request()
-        response = self.client.get(reverse("request-detail", args=[sr.id]))
+        response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
@@ -312,7 +329,7 @@ class CustomerRequestDetailTests(BookingTestCase):
 
 class CustomerCancelTests(BookingTestCase):
     def _cancel_url(self, sr):
-        return reverse("request-cancel", args=[sr.id])
+        return reverse("bookings:request-cancel", args=[sr.id])
 
     def test_cancel_pending_request(self):
         self.authenticate_customer()
@@ -364,7 +381,7 @@ class CustomerCancelTests(BookingTestCase):
 
 
 class ProviderIncomingTests(BookingTestCase):
-    url = reverse("request-incoming")
+    url = reverse("bookings:request-incoming")
 
     def test_returns_only_assigned_requests_for_this_provider(self):
         self.authenticate_provider()
@@ -405,7 +422,7 @@ class ProviderIncomingTests(BookingTestCase):
 
 class ProviderAcceptTests(BookingTestCase):
     def _accept_url(self, sr):
-        return reverse("request-accept", args=[sr.id])
+        return reverse("bookings:request-accept", args=[sr.id])
 
     def test_accept_assigned_request_transitions_to_confirmed(self):
         self.authenticate_provider()
@@ -443,7 +460,7 @@ class ProviderAcceptTests(BookingTestCase):
 
 class ProviderDeclineTests(BookingTestCase):
     def _decline_url(self, sr):
-        return reverse("request-decline", args=[sr.id])
+        return reverse("bookings:request-decline", args=[sr.id])
 
     def test_decline_returns_request_to_pending_and_clears_provider(self):
         self.authenticate_provider()
@@ -455,6 +472,7 @@ class ProviderDeclineTests(BookingTestCase):
         self.assertIsNone(sr.provider)
         self.assertIsNone(sr.assigned_at)
         self.assertEqual(sr.decline_reason, "Not available")
+        self.assertIsNotNone(sr.declined_at)
 
     def test_decline_without_reason_is_allowed(self):
         self.authenticate_provider()
@@ -484,7 +502,7 @@ class ProviderDeclineTests(BookingTestCase):
 
 class ProviderStartTests(BookingTestCase):
     def _start_url(self, sr):
-        return reverse("request-start", args=[sr.id])
+        return reverse("bookings:request-start", args=[sr.id])
 
     def test_start_confirmed_request_transitions_to_in_progress(self):
         self.authenticate_provider()
@@ -516,7 +534,7 @@ class ProviderStartTests(BookingTestCase):
 
 class ProviderCompleteTests(BookingTestCase):
     def _complete_url(self, sr):
-        return reverse("request-complete", args=[sr.id])
+        return reverse("bookings:request-complete", args=[sr.id])
 
     def _in_progress_request(self):
         sr = self.make_request()
@@ -560,7 +578,7 @@ class ProviderCompleteTests(BookingTestCase):
 
 class ProviderCancelTests(BookingTestCase):
     def _cancel_url(self, sr):
-        return reverse("request-provider-cancel", args=[sr.id])
+        return reverse("bookings:request-provider-cancel", args=[sr.id])
 
     def test_cancel_assigned_request(self):
         self.authenticate_provider()
@@ -596,170 +614,11 @@ class ProviderCancelTests(BookingTestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
-# ── Regression: Full Lifecycle ────────────────────────────────────────────────
-
-
-class FullLifecycleRegressionTest(BookingTestCase):
-    """
-    Walks a request through every valid state.
-    Guards against regressions that break the happy path.
-
-        pending → assigned → confirmed → in_progress → completed
-    """
-
-    def test_full_happy_path(self):
-        # 1. Customer creates request
-        self.authenticate_customer()
-        response = self.client.post(
-            reverse("request-list-create"),
-            {
-                "category": self.category.id,
-                "region": self.region.id,
-                "address": "123 Test St",
-                "title": "Full lifecycle test",
-                "description": "Testing every step",
-                "preferred_date": "2026-06-01",
-                "preferred_time": "10:00:00",
-            },
-        )
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        sr_id = response.data["id"]
-        sr = ServiceRequest.objects.get(id=sr_id)
-        self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
-
-        # 2. Admin assigns provider (direct model call)
-        sr.assign(self.provider)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
-        self.assertEqual(sr.provider, self.provider)
-        self.assertIsNotNone(sr.assigned_at)
-
-        # 3. Provider accepts
-        self.authenticate_provider()
-        response = self.client.post(reverse("request-accept", args=[sr_id]))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
-        self.assertIsNotNone(sr.confirmed_at)
-
-        # 4. Provider starts
-        response = self.client.post(reverse("request-start", args=[sr_id]))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
-        self.assertIsNotNone(sr.started_at)
-
-        # 5. Provider completes
-        response = self.client.post(
-            reverse("request-complete", args=[sr_id]), {"final_price": "200.00"}
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
-        self.assertEqual(str(sr.final_price), "200.00")
-        self.assertIsNotNone(sr.completed_at)
-
-        # 6. Verify terminal — no further transitions allowed
-        response = self.client.post(reverse("request-complete", args=[sr_id]), {})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-        self.authenticate_customer()
-        response = self.client.post(reverse("request-cancel", args=[sr_id]), {})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-
-class DeclineAndReassignRegressionTest(BookingTestCase):
-    """
-    Provider declines → request returns to pending → can be reassigned.
-    """
-
-    def test_decline_then_reassign_and_complete(self):
-        sr = self.make_request()
-
-        # 1. Admin assigns first provider
-        sr.assign(self.provider)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
-
-        # 2. First provider declines
-        self.authenticate_provider()
-        response = self.client.post(
-            reverse("request-decline", args=[sr.id]), {"reason": "Unavailable"}
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
-        self.assertIsNone(sr.provider)
-        self.assertEqual(sr.decline_reason, "Unavailable")
-
-        # 3. Admin reassigns to second provider
-        second_provider = create_provider(email="second@provider.com")
-        sr.assign(second_provider)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
-        self.assertEqual(sr.provider, second_provider)
-
-        # 4. Second provider accepts → starts → completes
-        self.client.force_authenticate(user=second_provider)
-        self.client.post(reverse("request-accept", args=[sr.id]))
-        self.client.post(reverse("request-start", args=[sr.id]))
-        response = self.client.post(
-            reverse("request-complete", args=[sr.id]), {"final_price": "300.00"}
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
-        self.assertEqual(sr.provider, second_provider)
-
-
-class InvalidTransitionRegressionTest(BookingTestCase):
-    """
-    Verifies every illegal transition returns 400.
-    Guards against accidentally loosening FSM guards.
-    """
-
-    def test_cannot_skip_steps_pending_to_complete(self):
-        self.authenticate_provider()
-        sr = self.make_request()
-        sr.provider = self.provider
-        sr.save()
-        response = self.client.post(reverse("request-complete", args=[sr.id]), {})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_cannot_skip_steps_confirmed_to_complete(self):
-        self.authenticate_provider()
-        sr = self.make_request()
-        self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
-        response = self.client.post(reverse("request-complete", args=[sr.id]), {})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_cannot_start_without_confirming_first(self):
-        self.authenticate_provider()
-        sr = self.assign_to_provider(self.make_request())
-        response = self.client.post(reverse("request-start", args=[sr.id]))
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_cannot_accept_already_confirmed_request(self):
-        self.authenticate_provider()
-        sr = self.make_request()
-        self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
-        response = self.client.post(reverse("request-accept", args=[sr.id]))
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_cannot_cancel_completed_request(self):
-        """COMPLETED is terminal — customer cannot cancel."""
-        self.authenticate_customer()
-        sr = self.make_request()
-        self.set_status(sr, ServiceRequestStatus.COMPLETED)
-        response = self.client.post(reverse("request-cancel", args=[sr.id]), {})
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-
 # ── Provider: Open Pool ───────────────────────────────────────────────────────
 
 
 class ProviderOpenRequestsTests(BookingTestCase):
-    url = reverse("request-open-pool")
+    url = reverse("bookings:request-open-pool")
 
     def test_returns_only_pending_requests(self):
         self.authenticate_provider()
@@ -805,7 +664,7 @@ class ProviderOpenRequestsTests(BookingTestCase):
 
 class ProviderPickRequestTests(BookingTestCase):
     def _pick_url(self, sr):
-        return reverse("request-pick", args=[sr.id])
+        return reverse("bookings:request-pick", args=[sr.id])
 
     def test_pick_pending_request_transitions_to_assigned(self):
         self.authenticate_provider()
@@ -871,9 +730,9 @@ class ProviderPickRequestTests(BookingTestCase):
 
     def test_cannot_pick_nonexistent_request(self):
         self.authenticate_provider()
-        import uuid
-
-        response = self.client.post(reverse("request-pick", args=[uuid.uuid4()]))
+        response = self.client.post(
+            reverse("bookings:request-pick", args=[uuid.uuid4()])
+        )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_customer_cannot_pick(self):
@@ -887,8 +746,204 @@ class ProviderPickRequestTests(BookingTestCase):
         response = self.client.post(self._pick_url(sr))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_two_providers_race_only_one_wins(self):
+        """Both providers attempt to pick the same request — exactly one succeeds."""
+        sr = self.make_request()
+        second_provider = create_provider(email="second@provider.com")
+        second_provider.categories.add(self.category)
 
-# ── Regression: Provider Self-Assignment Lifecycle ────────────────────────────
+        self.client.force_authenticate(user=self.provider)
+        r1 = self.client.post(self._pick_url(sr))
+
+        self.client.force_authenticate(user=second_provider)
+        r2 = self.client.post(self._pick_url(sr))
+
+        statuses = {r1.status_code, r2.status_code}
+        self.assertIn(status.HTTP_200_OK, statuses)
+        self.assertIn(status.HTTP_404_NOT_FOUND, statuses)
+
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
+        self.assertIsNotNone(sr.provider)
+
+
+# ── Regression: Full Lifecycle ────────────────────────────────────────────────
+
+
+class FullLifecycleRegressionTest(BookingTestCase):
+    """
+    Walks a request through every valid state.
+    Guards against regressions that break the happy path.
+
+        pending → assigned → confirmed → in_progress → completed
+    """
+
+    def test_full_happy_path(self):
+        # 1. Customer creates request
+        self.authenticate_customer()
+        response = self.client.post(
+            reverse("bookings:request-list-create"),
+            {
+                "category": self.category.id,
+                "region": self.region.id,
+                "address": "123 Test St",
+                "floor_number": "3",
+                "apartment_number": "12",
+                "special_mark": "Blue door on the left",
+                "latitude": 30.0444,
+                "longitude": 31.2357,
+                "title": "Full lifecycle test",
+                "description": "Testing every step",
+                "preferred_date": "2026-06-01",
+                "preferred_time": "10:00:00",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        sr_id = response.data["id"]
+        sr = ServiceRequest.objects.get(id=sr_id)
+        self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
+
+        # 2. Admin assigns provider (direct model call)
+        sr.assign(self.provider)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
+        self.assertEqual(sr.provider, self.provider)
+        self.assertIsNotNone(sr.assigned_at)
+
+        # 3. Provider accepts
+        self.authenticate_provider()
+        response = self.client.post(reverse("bookings:request-accept", args=[sr_id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
+        self.assertIsNotNone(sr.confirmed_at)
+
+        # 4. Provider starts
+        response = self.client.post(reverse("bookings:request-start", args=[sr_id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
+        self.assertIsNotNone(sr.started_at)
+
+        # 5. Provider completes
+        response = self.client.post(
+            reverse("bookings:request-complete", args=[sr_id]),
+            {"final_price": "200.00"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(str(sr.final_price), "200.00")
+        self.assertIsNotNone(sr.completed_at)
+
+        # 6. Verify terminal — no further transitions allowed
+        response = self.client.post(
+            reverse("bookings:request-complete", args=[sr_id]), {}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.authenticate_customer()
+        response = self.client.post(
+            reverse("bookings:request-cancel", args=[sr_id]), {}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class DeclineAndReassignRegressionTest(BookingTestCase):
+    """
+    Provider declines → request returns to pending → can be reassigned.
+    """
+
+    def test_decline_then_reassign_and_complete(self):
+        sr = self.make_request()
+
+        # 1. Admin assigns first provider
+        sr.assign(self.provider)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
+
+        # 2. First provider declines
+        self.authenticate_provider()
+        response = self.client.post(
+            reverse("bookings:request-decline", args=[sr.id]), {"reason": "Unavailable"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
+        self.assertIsNone(sr.provider)
+        self.assertEqual(sr.decline_reason, "Unavailable")
+        self.assertIsNotNone(
+            sr.declined_at
+        )  # audit trail stamped, request still pending
+
+        # 3. Admin reassigns to second provider
+        second_provider = create_provider(email="second@provider.com")
+        sr.assign(second_provider)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
+        self.assertEqual(sr.provider, second_provider)
+
+        # 4. Second provider accepts → starts → completes
+        self.client.force_authenticate(user=second_provider)
+        self.client.post(reverse("bookings:request-accept", args=[sr.id]))
+        self.client.post(reverse("bookings:request-start", args=[sr.id]))
+        response = self.client.post(
+            reverse("bookings:request-complete", args=[sr.id]),
+            {"final_price": "300.00"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.provider, second_provider)
+
+
+class InvalidTransitionRegressionTest(BookingTestCase):
+    """
+    Verifies every illegal transition returns 400.
+    Guards against accidentally loosening FSM guards.
+    """
+
+    def test_cannot_skip_steps_pending_to_complete(self):
+        self.authenticate_provider()
+        sr = self.make_request()
+        sr.provider = self.provider
+        sr.save()
+        response = self.client.post(
+            reverse("bookings:request-complete", args=[sr.id]), {}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_skip_steps_confirmed_to_complete(self):
+        self.authenticate_provider()
+        sr = self.make_request()
+        self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
+        response = self.client.post(
+            reverse("bookings:request-complete", args=[sr.id]), {}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_start_without_confirming_first(self):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request())
+        response = self.client.post(reverse("bookings:request-start", args=[sr.id]))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_accept_already_confirmed_request(self):
+        self.authenticate_provider()
+        sr = self.make_request()
+        self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
+        response = self.client.post(reverse("bookings:request-accept", args=[sr.id]))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_cancel_completed_request(self):
+        """COMPLETED is terminal — customer cannot cancel."""
+        self.authenticate_customer()
+        sr = self.make_request()
+        self.set_status(sr, ServiceRequestStatus.COMPLETED)
+        response = self.client.post(
+            reverse("bookings:request-cancel", args=[sr.id]), {}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 class ProviderSelfAssignLifecycleTest(BookingTestCase):
@@ -902,11 +957,16 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
         # 1. Customer creates request
         self.authenticate_customer()
         response = self.client.post(
-            reverse("request-list-create"),
+            reverse("bookings:request-list-create"),
             {
                 "category": self.category.id,
                 "region": self.region.id,
                 "address": "123 Test St",
+                "floor_number": "3",
+                "apartment_number": "12",
+                "special_mark": "Blue door on the left",
+                "latitude": 30.0444,
+                "longitude": 31.2357,
                 "title": "Self-assign lifecycle test",
                 "description": "Provider picks from pool",
                 "preferred_date": "2026-06-01",
@@ -918,30 +978,31 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
 
         # 2. Provider sees it in the open pool
         self.authenticate_provider()
-        pool_response = self.client.get(reverse("request-open-pool"))
+        pool_response = self.client.get(reverse("bookings:request-open-pool"))
         pool_ids = [r["id"] for r in self.get_results(pool_response)]
         self.assertIn(sr_id, pool_ids)
 
         # 3. Provider picks it
-        response = self.client.post(reverse("request-pick", args=[sr_id]))
+        response = self.client.post(reverse("bookings:request-pick", args=[sr_id]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["status"], ServiceRequestStatus.ASSIGNED)
 
         # 4. Request no longer in open pool
-        pool_response = self.client.get(reverse("request-open-pool"))
+        pool_response = self.client.get(reverse("bookings:request-open-pool"))
         pool_ids = [r["id"] for r in self.get_results(pool_response)]
         self.assertNotIn(sr_id, pool_ids)
 
         # 5. Appears in provider's incoming list
-        incoming = self.client.get(reverse("request-incoming"))
+        incoming = self.client.get(reverse("bookings:request-incoming"))
         incoming_ids = [r["id"] for r in self.get_results(incoming)]
         self.assertIn(sr_id, incoming_ids)
 
         # 6. Standard flow: accept → start → complete
-        self.client.post(reverse("request-accept", args=[sr_id]))
-        self.client.post(reverse("request-start", args=[sr_id]))
+        self.client.post(reverse("bookings:request-accept", args=[sr_id]))
+        self.client.post(reverse("bookings:request-start", args=[sr_id]))
         response = self.client.post(
-            reverse("request-complete", args=[sr_id]), {"final_price": "250.00"}
+            reverse("bookings:request-complete", args=[sr_id]),
+            {"final_price": "250.00"},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -955,7 +1016,7 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
 
 class CustomerRateProviderTests(BookingTestCase):
     def _rate_url(self, sr):
-        return reverse("request-rate", args=[sr.id])
+        return reverse("bookings:request-rate", args=[sr.id])
 
     def _completed_sr(self):
         return make_completed_request(
@@ -1040,7 +1101,7 @@ class CustomerRateProviderTests(BookingTestCase):
 
 class HistoryDetailTests(BookingTestCase):
     def _detail_url(self, sr):
-        return reverse("history-detail", args=[sr.id])
+        return reverse("bookings:history-detail", args=[sr.id])
 
     # ── Customer perspective ──────────────────────────────────────────────────
 
@@ -1156,21 +1217,304 @@ class HistoryDetailTests(BookingTestCase):
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_two_providers_race_only_one_wins(self):
-        """Both providers attempt to pick the same request — exactly one succeeds."""
+
+# ── New: Location Fields Required ────────────────────────────────────────────
+
+
+class LocationFieldsTests(BookingTestCase):
+    """Creating a request requires latitude, longitude, and all detail fields."""
+
+    url = reverse("bookings:request-list-create")
+
+    def _full_payload(self, **overrides):
+        payload = {
+            "category": self.category.id,
+            "region": self.region.id,
+            "address": "123 Test St",
+            "floor_number": "3",
+            "apartment_number": "12",
+            "special_mark": "Blue door on the left",
+            "latitude": 30.0444,
+            "longitude": 31.2357,
+            "title": "Fix leaking pipe",
+            "description": "Pipe under sink is leaking",
+            "preferred_date": "2026-06-01",
+            "preferred_time": "10:00:00",
+        }
+        payload.update(overrides)
+        return payload
+
+    def _post(self, payload):
+        self.authenticate_customer()
+        return self.client.post(self.url, payload)
+
+    def test_missing_latitude_returns_400(self):
+        payload = self._full_payload()
+        del payload["latitude"]
+        self.assertEqual(self._post(payload).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_missing_longitude_returns_400(self):
+        payload = self._full_payload()
+        del payload["longitude"]
+        self.assertEqual(self._post(payload).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_missing_floor_number_returns_400(self):
+        payload = self._full_payload()
+        del payload["floor_number"]
+        self.assertEqual(self._post(payload).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_missing_apartment_number_returns_400(self):
+        payload = self._full_payload()
+        del payload["apartment_number"]
+        self.assertEqual(self._post(payload).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_missing_special_mark_returns_400(self):
+        payload = self._full_payload()
+        del payload["special_mark"]
+        self.assertEqual(self._post(payload).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_latitude_out_of_range_returns_400(self):
+        self.assertEqual(
+            self._post(self._full_payload(latitude=95.0)).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_invalid_longitude_out_of_range_returns_400(self):
+        self.assertEqual(
+            self._post(self._full_payload(longitude=200.0)).status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_response_includes_all_location_fields(self):
+        response = self._post(self._full_payload())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.data
+        self.assertAlmostEqual(data["latitude"], 30.0444, places=3)
+        self.assertAlmostEqual(data["longitude"], 31.2357, places=3)
+        self.assertEqual(data["floor_number"], "3")
+        self.assertEqual(data["apartment_number"], "12")
+        self.assertEqual(data["special_mark"], "Blue door on the left")
+
+    def test_location_persisted_as_point(self):
+        response = self._post(self._full_payload())
+        sr = ServiceRequest.objects.get(id=response.data["id"])
+        self.assertIsNotNone(sr.location)
+        self.assertAlmostEqual(sr.location.y, 30.0444, places=3)  # latitude
+        self.assertAlmostEqual(sr.location.x, 31.2357, places=3)  # longitude
+
+
+# ── New: Category Filtering ───────────────────────────────────────────────────
+
+
+class CategoryFilteredOpenPoolTests(BookingTestCase):
+    """Open pool only shows requests whose category matches the provider's categories."""
+
+    url = reverse("bookings:request-open-pool")
+
+    def setUp(self):
+        super().setUp()
+        self.other_category = create_category(name="Electrical", slug="electrical")
+
+    def test_only_matching_category_requests_shown(self):
+        self.authenticate_provider()
+        matching = self.make_request(title="Plumbing Job")
+        other_sr = create_service_request(
+            self.customer, self.other_category, self.region, title="Electrical Job"
+        )
+
+        response = self.client.get(self.url)
+        ids = [str(r["id"]) for r in self.get_results(response)]
+        self.assertIn(str(matching.id), ids)
+        self.assertNotIn(str(other_sr.id), ids)
+
+    def test_provider_with_no_categories_sees_empty_pool(self):
+        provider_no_cats = create_provider(email="nocats@provider.com")
+        self.client.force_authenticate(user=provider_no_cats)
+        self.make_request()
+        response = self.client.get(self.url)
+        self.assertEqual(len(self.get_results(response)), 0)
+
+    def test_provider_with_multiple_categories_sees_all_matches(self):
+        self.provider.categories.add(self.other_category)
+        self.authenticate_provider()
+        plumbing = self.make_request(title="Plumbing Job")
+        electrical = create_service_request(
+            self.customer, self.other_category, self.region, title="Electrical Job"
+        )
+
+        ids = [str(r["id"]) for r in self.get_results(self.client.get(self.url))]
+        self.assertIn(str(plumbing.id), ids)
+        self.assertIn(str(electrical.id), ids)
+
+
+# ── New: Category Guard on Pick ───────────────────────────────────────────────
+
+
+class CategoryGuardPickTests(BookingTestCase):
+    """Provider cannot pick requests outside their registered categories."""
+
+    def setUp(self):
+        super().setUp()
+        self.other_category = create_category(name="Electrical", slug="electrical")
+
+    def test_pick_request_in_other_category_returns_404(self):
+        """Direct URL manipulation must not bypass the category guard."""
+        self.authenticate_provider()
+        other_sr = create_service_request(
+            self.customer, self.other_category, self.region
+        )
+        response = self.client.post(
+            reverse("bookings:request-pick", args=[other_sr.id])
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_pick_request_in_own_category_succeeds(self):
+        self.authenticate_provider()
         sr = self.make_request()
-        second_provider = create_provider(email="second@provider.com")
+        response = self.client.post(reverse("bookings:request-pick", args=[sr.id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        self.client.force_authenticate(user=self.provider)
-        r1 = self.client.post(reverse("request-pick", args=[sr.id]))
 
-        self.client.force_authenticate(user=second_provider)
-        r2 = self.client.post(reverse("request-pick", args=[sr.id]))
+# ── New: Provider Location Update ────────────────────────────────────────────
 
-        statuses = {r1.status_code, r2.status_code}
-        self.assertIn(status.HTTP_200_OK, statuses)
-        self.assertIn(status.HTTP_404_NOT_FOUND, statuses)
 
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
-        self.assertIsNotNone(sr.provider)
+class ProviderLocationUpdateTests(BookingTestCase):
+    """PATCH /providers/me/location/ — lightweight location ping endpoint."""
+
+    url = reverse("providers:provider-location")
+
+    def test_update_location_returns_200_with_coords(self):
+        self.authenticate_provider()
+        response = self.client.patch(
+            self.url, {"latitude": 30.0444, "longitude": 31.2357}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertAlmostEqual(response.data["latitude"], 30.0444, places=3)
+        self.assertAlmostEqual(response.data["longitude"], 31.2357, places=3)
+
+    def test_update_location_persists_point(self):
+        self.authenticate_provider()
+        self.client.patch(self.url, {"latitude": 29.9765, "longitude": 31.1313})
+        self.provider.refresh_from_db()
+        self.assertIsNotNone(self.provider.location)
+        self.assertAlmostEqual(self.provider.location.y, 29.9765, places=3)
+        self.assertAlmostEqual(self.provider.location.x, 31.1313, places=3)
+
+    def test_repeated_updates_overwrite_previous_location(self):
+        self.authenticate_provider()
+        self.client.patch(self.url, {"latitude": 30.0, "longitude": 31.0})
+        self.client.patch(self.url, {"latitude": 29.5, "longitude": 30.5})
+        self.provider.refresh_from_db()
+        self.assertAlmostEqual(self.provider.location.y, 29.5, places=1)
+
+    def test_invalid_latitude_returns_400(self):
+        self.authenticate_provider()
+        response = self.client.patch(self.url, {"latitude": 95.0, "longitude": 31.0})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_longitude_returns_400(self):
+        self.authenticate_provider()
+        response = self.client.patch(self.url, {"latitude": 30.0, "longitude": 200.0})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_missing_longitude_returns_400(self):
+        self.authenticate_provider()
+        response = self.client.patch(self.url, {"latitude": 30.0})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_missing_latitude_returns_400(self):
+        self.authenticate_provider()
+        response = self.client.patch(self.url, {"longitude": 31.0})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_customer_cannot_use_this_endpoint(self):
+        self.authenticate_customer()
+        response = self.client.patch(self.url, {"latitude": 30.0, "longitude": 31.0})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_returns_401(self):
+        response = self.client.patch(self.url, {"latitude": 30.0, "longitude": 31.0})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ── New: Distance & ETA Fields ────────────────────────────────────────────────
+
+
+class DistanceAndETATests(BookingTestCase):
+    """
+    provider_distance_km / provider_eta_minutes appear in responses
+    once the provider has a stored location.
+    """
+
+    def _set_provider_location(self, lat, lng):
+        self.provider.location = Point(x=lng, y=lat, srid=4326)
+        self.provider.save(update_fields=["location", "updated_at"])
+
+    # ── No provider location ──────────────────────────────────
+
+    def test_distance_null_when_provider_has_no_location(self):
+        sr = self.assign_to_provider(self.make_request())
+        self.authenticate_customer()
+        data = self.client.get(reverse("bookings:request-detail", args=[sr.id])).data
+        self.assertIsNone(data["provider_distance_km"])
+        self.assertIsNone(data["provider_eta_minutes"])
+
+    def test_distance_null_for_unassigned_request(self):
+        sr = self.make_request()
+        self.authenticate_customer()
+        data = self.client.get(reverse("bookings:request-detail", args=[sr.id])).data
+        self.assertIsNone(data["provider_distance_km"])
+        self.assertIsNone(data["provider_eta_minutes"])
+
+    # ── With provider location ────────────────────────────────
+
+    def test_distance_present_when_provider_has_location(self):
+        self._set_provider_location(30.0444, 31.2357)
+        sr = self.assign_to_provider(self.make_request())
+        self.authenticate_customer()
+        data = self.client.get(reverse("bookings:request-detail", args=[sr.id])).data
+        self.assertIsNotNone(data["provider_distance_km"])
+        self.assertIsNotNone(data["provider_eta_minutes"])
+
+    def test_eta_is_positive_integer(self):
+        # Provider ~30 km north — at 30 km/h should be ~60 min
+        self._set_provider_location(30.314, 31.2357)
+        sr = self.assign_to_provider(self.make_request())
+        self.authenticate_customer()
+        eta = self.client.get(reverse("bookings:request-detail", args=[sr.id])).data[
+            "provider_eta_minutes"
+        ]
+        self.assertIsNotNone(eta)
+        self.assertGreater(eta, 0)
+        self.assertIsInstance(eta, int)
+
+    def test_provider_sees_distance_to_job_in_history_detail(self):
+        self._set_provider_location(30.0444, 31.2357)
+        sr = make_completed_request(
+            self.customer, self.provider, self.category, self.region
+        )
+        self.authenticate_provider()
+        data = self.client.get(reverse("bookings:history-detail", args=[sr.id])).data
+        self.assertIn("distance_to_job_km", data)
+        self.assertIn("eta_to_job_minutes", data)
+        self.assertIsNotNone(data["distance_to_job_km"])
+
+    def test_open_pool_includes_distance_km_with_provider_location(self):
+        self._set_provider_location(30.0444, 31.2357)
+        self.make_request()
+        self.authenticate_provider()
+        results = self.get_results(
+            self.client.get(reverse("bookings:request-open-pool"))
+        )
+        self.assertTrue(len(results) > 0)
+        self.assertIn("distance_km", results[0])
+        self.assertIsNotNone(results[0]["distance_km"])
+
+    def test_open_pool_distance_km_null_without_provider_location(self):
+        self.make_request()
+        self.authenticate_provider()
+        results = self.get_results(
+            self.client.get(reverse("bookings:request-open-pool"))
+        )
+        self.assertTrue(len(results) > 0)
+        self.assertIsNone(results[0]["distance_km"])

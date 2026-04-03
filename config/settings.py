@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-import cloudinary
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -98,8 +97,8 @@ def _parse_db_url(url):
     }
 
 
-DATABASES = {
-    "default": _parse_db_url(os.getenv("DATABASE_URL"))
+_db_config = (
+    _parse_db_url(os.getenv("DATABASE_URL"))
     if os.getenv("DATABASE_URL")
     else {
         "ENGINE": "django.contrib.gis.db.backends.postgis",
@@ -109,7 +108,10 @@ DATABASES = {
         "HOST": os.getenv("DB_HOST", "db"),
         "PORT": os.getenv("DB_PORT", "5432"),
     }
-}
+)
+_db_config["CONN_MAX_AGE"] = 0 if DEBUG else 60
+
+DATABASES = {"default": _db_config}
 
 
 # ── Static files ──────────────────────────────────────────────
@@ -137,11 +139,6 @@ _cloudinary_ready = all(
 )
 
 if _cloudinary_ready:
-    cloudinary.config(
-        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
-        api_key=os.getenv("CLOUDINARY_API_KEY"),
-        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
-    )
     CLOUDINARY_STORAGE = {
         "CLOUD_NAME": os.getenv("CLOUDINARY_CLOUD_NAME"),
         "API_KEY": os.getenv("CLOUDINARY_API_KEY"),

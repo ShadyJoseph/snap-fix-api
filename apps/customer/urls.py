@@ -9,6 +9,8 @@ from .views import (
     CustomerRegisterView,
 )
 
+app_name = "customers"
+
 urlpatterns = [
     path("register/", CustomerRegisterView.as_view(), name="customer-register"),
     path("login/", CustomerLoginView.as_view(), name="customer-login"),

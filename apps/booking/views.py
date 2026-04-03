@@ -1,5 +1,6 @@
 import logging
 
+from django.contrib.gis.db.models.functions import Distance
 from django.db import transaction
 from django.http import Http404
 from rest_framework import generics, permissions, status
@@ -81,7 +82,7 @@ class ServiceRequestListView(generics.ListCreateAPIView):
             )
         elif hasattr(user, "provider"):
             qs = ServiceRequest.objects.filter(provider=user.provider).select_related(
-                "category", "region", "customer", "review"
+                "category", "region", "customer", "provider", "review"
             )
         else:
             return ServiceRequest.objects.none()
@@ -113,7 +114,7 @@ class ServiceRequestDetailView(generics.RetrieveAPIView):
             )
         if hasattr(user, "provider"):
             return ServiceRequest.objects.filter(provider=user.provider).select_related(
-                "category", "region", "customer", "review"
+                "category", "region", "customer", "provider", "review"
             )
         return ServiceRequest.objects.none()
 
@@ -129,7 +130,9 @@ class CustomerCancelView(APIView):
         customer = get_customer_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(customer=customer),
+            ServiceRequest.objects.filter(customer=customer).select_related(
+                "category", "region", "provider", "review"
+            ),
         )
         serializer = ServiceRequestCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -162,7 +165,7 @@ class ProviderIncomingRequestsView(generics.ListAPIView):
             ServiceRequest.objects.filter(
                 provider=provider, status=ServiceRequestStatus.ASSIGNED
             )
-            .select_related("category", "region", "customer")
+            .select_related("category", "region", "customer", "provider", "review")
             .order_by("-assigned_at")
         )
 
@@ -179,7 +182,9 @@ class ProviderAcceptView(APIView):
         provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=provider),
+            ServiceRequest.objects.filter(provider=provider).select_related(
+                "category", "region", "provider", "review"
+            ),
         )
         fsm_transition(sr.confirm)
         return Response(ServiceRequestSerializer(sr).data)
@@ -197,7 +202,9 @@ class ProviderDeclineView(APIView):
         provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=provider),
+            ServiceRequest.objects.filter(provider=provider).select_related(
+                "category", "region", "provider", "review"
+            ),
         )
         serializer = ServiceRequestDeclineSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -223,7 +230,9 @@ class ProviderStartView(APIView):
         provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=provider),
+            ServiceRequest.objects.filter(provider=provider).select_related(
+                "category", "region", "provider", "review"
+            ),
         )
         fsm_transition(sr.start)
         return Response(ServiceRequestSerializer(sr).data)
@@ -241,7 +250,9 @@ class ProviderCompleteView(APIView):
         provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=provider),
+            ServiceRequest.objects.filter(provider=provider).select_related(
+                "category", "region", "provider", "review"
+            ),
         )
         serializer = ServiceRequestCompleteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -267,7 +278,9 @@ class ProviderCancelView(APIView):
         provider = get_provider_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(provider=provider),
+            ServiceRequest.objects.filter(provider=provider).select_related(
+                "category", "region", "provider", "review"
+            ),
         )
         serializer = ServiceRequestCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -286,37 +299,53 @@ class ProviderPickRequestView(APIView):
     """
     POST /api/v1/bookings/requests/{id}/pick/
     Provider self-assigns a pending request from the open pool.
+    The request category must match one of the provider's categories.
     """
 
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
         provider = get_provider_or_403(request.user)
-        # Must be pending — no provider filter here since it's unassigned
         sr = get_request_or_404(
-            pk, ServiceRequest.objects.filter(status=ServiceRequestStatus.PENDING)
+            pk,
+            ServiceRequest.objects.filter(
+                status=ServiceRequestStatus.PENDING,
+                category__in=provider.categories.all(),
+            ),
         )
         fsm_transition(lambda: sr.self_assign(provider))
+        # self_assign() calls refresh_from_db() which clears relation caches,
+        # so re-fetch with select_related before serializing.
+        sr = ServiceRequest.objects.select_related(
+            "category", "region", "provider", "review"
+        ).get(pk=sr.pk)
         return Response(ServiceRequestSerializer(sr).data)
 
 
 class ProviderOpenRequestsView(generics.ListAPIView):
     """
     GET /api/v1/bookings/requests/open/
-    Pool of pending requests visible to all providers.
-    Providers use this to browse and pick a job.
+    Pending requests whose category matches one of the provider's categories.
+    If the provider has a saved location, results are annotated with
+    distance_km and sorted by urgency → distance → recency.
     """
 
     serializer_class = ServiceRequestSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        get_provider_or_403(self.request.user)
-        return (
-            ServiceRequest.objects.filter(status=ServiceRequestStatus.PENDING)
-            .select_related("category", "region")
-            .order_by("-is_urgent", "-created_at")  # urgent first
-        )
+        provider = get_provider_or_403(self.request.user)
+        qs = ServiceRequest.objects.filter(
+            status=ServiceRequestStatus.PENDING,
+            category__in=provider.categories.all(),
+        ).select_related("category", "region")
+        if provider.location:
+            qs = qs.annotate(distance=Distance("location", provider.location)).order_by(
+                "-is_urgent", "distance", "-created_at"
+            )
+        else:
+            qs = qs.order_by("-is_urgent", "-created_at")
+        return qs
 
 
 # ── Rating ────────────────────────────────────────────────────
@@ -337,7 +366,9 @@ class CustomerRateProviderView(APIView):
         customer = get_customer_or_403(request.user)
         sr = get_request_or_404(
             pk,
-            ServiceRequest.objects.filter(customer=customer).select_related("provider"),
+            ServiceRequest.objects.filter(customer=customer).select_related(
+                "provider", "review"
+            ),
         )
 
         if sr.status != ServiceRequestStatus.COMPLETED:
@@ -395,6 +426,6 @@ class HistoryDetailView(generics.RetrieveAPIView):
             )
         if hasattr(user, "provider"):
             return ServiceRequest.objects.filter(provider=user.provider).select_related(
-                "category", "region", "customer", "review"
+                "category", "region", "customer", "provider", "review"
             )
         return ServiceRequest.objects.none()

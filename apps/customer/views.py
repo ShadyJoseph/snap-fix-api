@@ -74,14 +74,17 @@ class CustomerProfileView(generics.RetrieveUpdateAPIView):
 
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "patch", "head", "options"]
-
-    def get_serializer_class(self):
-        if self.request.method == "PATCH":
-            return CustomerUpdateSerializer
-        return CustomerProfileSerializer
+    serializer_class = CustomerProfileSerializer
 
     def get_object(self):
         return get_customer_or_403(self.request.user)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = CustomerUpdateSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(CustomerProfileSerializer(instance).data)
 
 
 # ── Favorites ─────────────────────────────────────────────────

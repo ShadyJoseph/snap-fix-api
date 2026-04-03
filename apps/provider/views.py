@@ -3,8 +3,10 @@ from knox.views import LogoutView as KnoxLogoutView
 from rest_framework import generics, permissions, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .serializers import (
+    ProviderLocationSerializer,
     ProviderLoginSerializer,
     ProviderProfileSerializer,
     ProviderRegisterSerializer,
@@ -78,13 +80,41 @@ class ProviderProfileView(generics.RetrieveUpdateAPIView):
 
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "patch", "head", "options"]
-
-    def get_serializer_class(self):
-        if self.request.method == "PATCH":
-            return ProviderUpdateSerializer
-        return ProviderProfileSerializer
+    serializer_class = ProviderProfileSerializer
 
     def get_object(self):
         if not hasattr(self.request.user, "provider"):
             raise PermissionDenied("No provider account found.")
         return self.request.user.provider
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = ProviderUpdateSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ProviderProfileSerializer(instance).data)
+
+
+class ProviderLocationView(APIView):
+    """
+    PATCH /api/v1/providers/me/location/
+
+    Lightweight ping endpoint — called by the provider app every ~60 s
+    while they are on an active job.  Only updates the stored Point; no
+    other profile fields are touched.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request):
+        if not hasattr(request.user, "provider"):
+            raise PermissionDenied("No provider account found.")
+        serializer = ProviderLocationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(provider=request.user.provider)
+        return Response(
+            {
+                "latitude": serializer.validated_data["latitude"],
+                "longitude": serializer.validated_data["longitude"],
+            }
+        )

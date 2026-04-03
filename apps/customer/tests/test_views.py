@@ -33,7 +33,7 @@ def create_customer(**kwargs):
 
 
 class CustomerRegisterTests(APITestCase):
-    url = reverse("customer-register")
+    url = reverse("customers:customer-register")
 
     def test_register_success(self):
         payload = {
@@ -78,7 +78,7 @@ class CustomerRegisterTests(APITestCase):
 
 
 class CustomerLoginTests(APITestCase):
-    url = reverse("customer-login")
+    url = reverse("customers:customer-login")
 
     def setUp(self):
         self.customer = create_customer(email="customer@test.com")
@@ -129,7 +129,7 @@ class CustomerLoginTests(APITestCase):
 
 
 class CustomerLogoutTests(APITestCase):
-    url = reverse("customer-logout")
+    url = reverse("customers:customer-logout")
 
     def setUp(self):
         self.customer = create_customer()
@@ -147,7 +147,7 @@ class CustomerLogoutTests(APITestCase):
 
 
 class CustomerProfileTests(APITestCase):
-    url = reverse("customer-profile")
+    url = reverse("customers:customer-profile")
 
     def setUp(self):
         self.customer = create_customer()
@@ -167,7 +167,7 @@ class CustomerProfileTests(APITestCase):
 
 
 class CustomerProfileUpdateTests(APITestCase):
-    url = reverse("customer-profile")
+    url = reverse("customers:customer-profile")
 
     def setUp(self):
         self.customer = create_customer()
@@ -269,7 +269,7 @@ class FavoritesTestCase(APITestCase):
 
     def _toggle_url(self, provider=None):
         p = provider or self.provider
-        return reverse("customer-favorite-toggle", args=[p.pk])
+        return reverse("customers:customer-favorite-toggle", args=[p.pk])
 
 
 # ── Favorites: Toggle ─────────────────────────────────────────────────────────
@@ -300,7 +300,7 @@ class CustomerFavoriteToggleTests(FavoritesTestCase):
     def test_nonexistent_provider_returns_404(self):
         import uuid
 
-        url = reverse("customer-favorite-toggle", args=[uuid.uuid4()])
+        url = reverse("customers:customer-favorite-toggle", args=[uuid.uuid4()])
         response = self.client.post(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -319,7 +319,7 @@ class CustomerFavoriteToggleTests(FavoritesTestCase):
 
 
 class CustomerFavoritesListTests(FavoritesTestCase):
-    url = reverse("customer-favorites-list")
+    url = reverse("customers:customer-favorites-list")
 
     def test_returns_empty_when_no_favorites(self):
         response = self.client.get(self.url)

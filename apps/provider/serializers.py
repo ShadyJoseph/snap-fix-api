@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate
+from django.contrib.gis.geos import Point
 from rest_framework import serializers
 
 from apps.user.models import User
@@ -59,6 +60,8 @@ class ProviderSerializer(serializers.ModelSerializer):
 
     completion_rate = serializers.SerializerMethodField()
     rating = serializers.FloatField(read_only=True)
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -81,6 +84,8 @@ class ProviderSerializer(serializers.ModelSerializer):
             "total_earnings",
             "hourly_rate",
             "years_of_experience",
+            "latitude",
+            "longitude",
             "date_joined",
         ]
         read_only_fields = fields
@@ -88,12 +93,20 @@ class ProviderSerializer(serializers.ModelSerializer):
     def get_completion_rate(self, obj):
         return obj.get_completion_rate()
 
+    def get_latitude(self, obj):
+        return obj.location.y if obj.location else None
+
+    def get_longitude(self, obj):
+        return obj.location.x if obj.location else None
+
 
 class ProviderProfileSerializer(serializers.ModelSerializer):
     """Full serializer for the authenticated provider's own profile (GET /me/)."""
 
     completion_rate = serializers.SerializerMethodField()
     rating = serializers.FloatField(read_only=True)
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
 
     class Meta:
         model = Provider
@@ -105,6 +118,8 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
             "phone",
             "profile_picture",
             "address",
+            "latitude",
+            "longitude",
             "business_name",
             "bio",
             "hourly_rate",
@@ -127,9 +142,18 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
     def get_completion_rate(self, obj):
         return obj.get_completion_rate()
 
+    def get_latitude(self, obj):
+        return obj.location.y if obj.location else None
+
+    def get_longitude(self, obj):
+        return obj.location.x if obj.location else None
+
 
 class ProviderUpdateSerializer(serializers.ModelSerializer):
     """PATCH /me/ — only non-sensitive profile fields."""
+
+    latitude = serializers.FloatField(required=False, allow_null=True, write_only=True)
+    longitude = serializers.FloatField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = Provider
@@ -144,4 +168,46 @@ class ProviderUpdateSerializer(serializers.ModelSerializer):
             "hourly_rate",
             "years_of_experience",
             "is_available",
+            "latitude",
+            "longitude",
         ]
+
+    def validate(self, data):
+        lat = data.pop("latitude", None)
+        lng = data.pop("longitude", None)
+        if lat is not None and lng is not None:
+            data["location"] = Point(x=lng, y=lat, srid=4326)
+        elif (lat is None) != (lng is None):
+            raise serializers.ValidationError(
+                "Provide both latitude and longitude, or neither."
+            )
+        return data
+
+
+class ProviderLocationSerializer(serializers.Serializer):
+    """
+    PATCH /me/location/
+    Lightweight endpoint for frequent location pings (e.g. every 60 s).
+    Accepts latitude + longitude and updates the provider's stored location.
+    """
+
+    latitude = serializers.FloatField()
+    longitude = serializers.FloatField()
+
+    def validate_latitude(self, value):
+        if not (-90 <= value <= 90):
+            raise serializers.ValidationError("Latitude must be between -90 and 90.")
+        return value
+
+    def validate_longitude(self, value):
+        if not (-180 <= value <= 180):
+            raise serializers.ValidationError("Longitude must be between -180 and 180.")
+        return value
+
+    def save(self, provider):
+        provider.location = Point(
+            x=self.validated_data["longitude"],
+            y=self.validated_data["latitude"],
+            srid=4326,
+        )
+        provider.save(update_fields=["location", "updated_at"])
