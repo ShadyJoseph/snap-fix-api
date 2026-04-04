@@ -60,6 +60,11 @@ def backfill_detail_fields(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    # RunPython ops UPDATE the PostGIS geography column, queuing deferred triggers.
+    # AlterField on the same table then fails with "pending trigger events" inside
+    # a single transaction. atomic=False lets each operation commit independently.
+    atomic = False
+
     dependencies = [
         ("booking", "0005_remove_servicerequest_latitude_and_more"),
     ]
