@@ -246,10 +246,16 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         self.fields["reviewed_by"].widget.can_change_related = False
         self.fields["reviewed_by"].widget.can_delete_related = False
 
-        self.fields["applicant"].queryset = Provider.objects.filter(
+        applicant_qs = Provider.objects.filter(
             is_active=False,
             verification_status=ProviderVerificationStatus.PENDING,
         )
+        # Always include the currently linked applicant (may already be approved).
+        if self.instance.pk and self.instance.applicant_id:
+            applicant_qs = applicant_qs | Provider.objects.filter(
+                pk=self.instance.applicant_id
+            )
+        self.fields["applicant"].queryset = applicant_qs
         self.fields["applicant"].required = False
         self.fields["applicant"].widget.can_add_related = False
         self.fields["applicant"].widget.can_change_related = False

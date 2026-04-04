@@ -49,6 +49,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "id",
         "status",
         "location",
+        "declined_at",
         "assigned_at",
         "confirmed_at",
         "started_at",
@@ -155,6 +156,13 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Decline Info",
+            {
+                "fields": ("decline_reason", "declined_at"),
+                "classes": ("collapse",),
+            },
+        ),
+        (
             "Admin Notes",
             {
                 "fields": ("admin_notes",),
@@ -208,6 +216,13 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             "Cancellation",
             {
                 "fields": ("cancellation_info",),
+                "classes": ("collapse",),
+            },
+        ),
+        (
+            "Decline Info",
+            {
+                "fields": ("decline_reason", "declined_at"),
                 "classes": ("collapse",),
             },
         ),

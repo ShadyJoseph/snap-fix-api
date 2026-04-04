@@ -16,7 +16,14 @@ class CustomerAdmin(admin.ModelAdmin):
     )
     list_filter = ("is_active", "is_verified", "date_joined")
     search_fields = ("email", "first_name", "last_name", "phone")
-    readonly_fields = ("date_joined", "last_login", "updated_at", "total_cashback", "location")
+    ordering = ("-date_joined",)
+    readonly_fields = (
+        "date_joined",
+        "last_login",
+        "updated_at",
+        "total_cashback",
+        "location",
+    )
     filter_horizontal = ("favorite_providers",)
 
     fieldsets = (
