@@ -78,6 +78,7 @@ class ProviderAdmin(admin.ModelAdmin):
         "date_joined",
         "last_login",
         "updated_at",
+        "location",
         "total_earnings",
         "total_jobs",
         "completed_jobs",
@@ -118,7 +119,7 @@ class ProviderAdmin(admin.ModelAdmin):
         ("Business", {"fields": ("business_name", "bio")}),
         ("Financial", {"fields": ("total_earnings", "available_balance")}),
         ("Availability", {"fields": ("is_available",)}),
-        ("Location", {"fields": ("address", "latitude", "longitude")}),
+        ("Location", {"fields": ("address", "location")}),
         (
             "Statistics",
             {

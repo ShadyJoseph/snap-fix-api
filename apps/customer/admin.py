@@ -16,7 +16,7 @@ class CustomerAdmin(admin.ModelAdmin):
     )
     list_filter = ("is_active", "is_verified", "date_joined")
     search_fields = ("email", "first_name", "last_name", "phone")
-    readonly_fields = ("date_joined", "last_login", "updated_at", "total_cashback")
+    readonly_fields = ("date_joined", "last_login", "updated_at", "total_cashback", "location")
     filter_horizontal = ("favorite_providers",)
 
     fieldsets = (
@@ -32,7 +32,7 @@ class CustomerAdmin(admin.ModelAdmin):
                 )
             },
         ),
-        ("Location", {"fields": ("address", "latitude", "longitude")}),
+        ("Location", {"fields": ("address", "location")}),
         ("Wallet & Finances", {"fields": ("wallet_balance", "total_cashback")}),
         ("Favorites", {"fields": ("favorite_providers",)}),
         ("Statistics", {"fields": ("total_bookings",)}),

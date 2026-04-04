@@ -32,7 +32,7 @@ class UserAdmin(BaseUserAdmin):
                 ),
             },
         ),
-        ("Location", {"fields": ("latitude", "longitude")}),
+        ("Location", {"fields": ("location",)}),
         (
             "Permissions",
             {
@@ -64,6 +64,8 @@ class UserAdmin(BaseUserAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         readonly = list(super().get_readonly_fields(request, obj))
+        if "location" not in readonly:
+            readonly.append("location")
         if obj and hasattr(obj, "staff"):
             # is_staff is app-controlled for Staff instances — set automatically by Staff.save()
             if "is_staff" not in readonly:
