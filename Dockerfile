@@ -22,4 +22,4 @@ RUN SECRET_KEY=dummy DEBUG=False python manage.py collectstatic --noinput
 EXPOSE 8000
 
 # Don't run migrations or superuser here; handled in Railway releaseCommand
-CMD ["gunicorn", "config.wsgi:application"]
+CMD ["sh", "-c", "until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 120"]
