@@ -4,7 +4,7 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 releaseCommand = "sh -c \"until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser\""
-startCommand = "sh -c 'gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --preload --workers 2'"
+startCommand = "sh -c 'gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120'"
 healthcheckPath = "/"
 healthcheckTimeout = 60
 restartPolicyType = "on_failure"
