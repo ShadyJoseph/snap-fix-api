@@ -3,12 +3,11 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# This runs once per deployment. If this fails, the new version won't go live.
 releaseCommand = "python manage.py migrate --noinput && python manage.py create_superuser"
 
-# The main start command. We pipe logs to stdout so you can see them in the dashboard.
-startCommand = "bash -c 'gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug'"
-# Railway health check settings
+# This is the most reliable way on Railway
+startCommand = "bash -c 'echo \"=== PORT is ${PORT} ===\"; gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug'"
+
 healthcheckPath = "/"
 healthcheckTimeout = 60
 
