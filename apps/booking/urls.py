@@ -1,9 +1,12 @@
 from django.urls import path
 
 from .views import (
+    CustomerApproveQuoteView,
     CustomerCancelView,
     CustomerRateProviderView,
+    CustomerRejectQuoteView,
     HistoryDetailView,
+    InitiateCardPaymentView,
     ProviderAcceptView,
     ProviderCancelView,
     ProviderCompleteView,
@@ -11,6 +14,7 @@ from .views import (
     ProviderIncomingRequestsView,
     ProviderOpenRequestsView,
     ProviderPickRequestView,
+    ProviderQuoteView,
     ProviderStartView,
     ServiceRequestDetailView,
     ServiceRequestListView,
@@ -36,6 +40,22 @@ urlpatterns = [
         CustomerRateProviderView.as_view(),
         name="request-rate",
     ),
+    path(
+        "requests/<uuid:pk>/approve-quote/",
+        CustomerApproveQuoteView.as_view(),
+        name="request-approve-quote",
+    ),
+    path(
+        "requests/<uuid:pk>/reject-quote/",
+        CustomerRejectQuoteView.as_view(),
+        name="request-reject-quote",
+    ),
+    # Card payments only: attach Stripe PaymentMethod before job completes.
+    path(
+        "requests/<uuid:pk>/initiate-card-payment/",
+        InitiateCardPaymentView.as_view(),
+        name="request-initiate-card-payment",
+    ),
     # ── Provider: pool + self-assign ──────────────────────────
     path(
         "requests/open/", ProviderOpenRequestsView.as_view(), name="request-open-pool"
@@ -51,6 +71,11 @@ urlpatterns = [
         name="request-pick",
     ),
     # ── Provider: FSM actions ─────────────────────────────────
+    path(
+        "requests/<uuid:pk>/quote/",
+        ProviderQuoteView.as_view(),
+        name="request-quote",
+    ),
     path(
         "requests/<uuid:pk>/accept/",
         ProviderAcceptView.as_view(),

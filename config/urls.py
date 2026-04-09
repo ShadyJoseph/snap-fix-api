@@ -1,8 +1,8 @@
 from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
 from django.http import HttpResponse
-from django.urls import include, path
+from django.urls import include, path, re_path
+from django.views.static import serve
 
 
 def home(request):
@@ -18,9 +18,6 @@ urlpatterns = [
     path("api/v1/providers/", include("apps.provider.urls")),
     path("api/v1/core/", include("apps.core.urls")),
     path("api/v1/bookings/", include("apps.booking.urls")),
+    # Serve uploaded media files from the Railway volume mounted at /app/media.
+    re_path(r"^media/(?P<path>.+)$", serve, {"document_root": settings.MEDIA_ROOT}),
 ]
-
-# Local dev only — in production, media is served by Cloudinary
-# and static files are served by Whitenoise (no Django serving needed)
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

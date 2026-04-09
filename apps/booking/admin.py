@@ -5,9 +5,17 @@ from django.urls import reverse
 from django.utils.html import format_html
 
 from .choices import CancelledBy, ServiceRequestStatus
-from .models import ServiceRequest
+from .models import ServiceRequest, ServiceRequestPhoto
 
 logger = logging.getLogger(__name__)
+
+
+class ServiceRequestPhotoInline(admin.TabularInline):
+    model = ServiceRequestPhoto
+    fields = ("image", "uploaded_at")
+    readonly_fields = ("uploaded_at",)
+    extra = 0
+    can_delete = False
 
 
 @admin.register(ServiceRequest)
@@ -22,10 +30,14 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "is_urgent",
         "preferred_date",
         "final_price",
+        "payment_method",
+        "payment_status",
         "created_at",
     )
     list_filter = (
         "status",
+        "payment_method",
+        "payment_status",
         "is_urgent",
         "category",
         "region",
@@ -42,13 +54,16 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "provider__first_name",
         "provider__last_name",
     )
-    # MTI models — raw_id_fields avoids autocomplete resolution issues
     raw_id_fields = ("customer", "provider")
     autocomplete_fields = ("category", "region")
     readonly_fields = (
         "id",
         "status",
         "location",
+        "quoted_price",
+        "final_price",
+        "payment_status",
+        "stripe_payment_intent_id",
         "declined_at",
         "assigned_at",
         "confirmed_at",
@@ -60,7 +75,9 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "customer_link",
         "provider_link",
         "cancellation_info",
+        "payment_summary",
     )
+    inlines = [ServiceRequestPhotoInline]
     actions = [
         "action_confirm",
         "action_start",
@@ -70,19 +87,22 @@ class ServiceRequestAdmin(admin.ModelAdmin):
 
     # ── Fieldsets ─────────────────────────────────────────────
 
+    _pricing_fields = (
+        "estimated_price",
+        "quoted_price",
+        "final_price",
+        "payment_method",
+        "wallet_amount",
+        "payment_summary",
+        "payment_status",
+        "stripe_payment_intent_id",
+    )
+
     _add_fieldsets = (
-        (
-            "Parties",
-            {
-                "fields": ("customer", "provider"),
-                "description": "Selecting a provider here will immediately assign them.",
-            },
-        ),
+        ("Parties", {"fields": ("customer", "provider")}),
         (
             "Request Details",
-            {
-                "fields": ("title", "description", "category", "is_urgent"),
-            },
+            {"fields": ("title", "description", "category", "is_urgent")},
         ),
         (
             "Location & Scheduling",
@@ -96,43 +116,25 @@ class ServiceRequestAdmin(admin.ModelAdmin):
                     "special_mark",
                     "preferred_date",
                     "preferred_time",
-                ),
+                )
             },
         ),
-        (
-            "Pricing",
-            {
-                "fields": ("estimated_price", "final_price"),
-            },
-        ),
-        (
-            "Admin Notes",
-            {
-                "fields": ("admin_notes",),
-            },
-        ),
+        ("Pricing & Payment", {"fields": _pricing_fields}),
+        ("Admin Notes", {"fields": ("admin_notes",)}),
     )
 
-    # Pending requests — provider is editable so admin can assign
     _pending_fieldsets = (
-        (
-            "Status",
-            {
-                "fields": ("id", "status", "customer_link"),
-            },
-        ),
+        ("Status", {"fields": ("id", "status", "customer_link")}),
         (
             "Assign Provider",
             {
                 "fields": ("provider",),
-                "description": "Select a provider to assign this request. Status will move to Assigned.",
+                "description": "Select a provider to assign this request.",
             },
         ),
         (
             "Request Details",
-            {
-                "fields": ("title", "description", "category", "is_urgent"),
-            },
+            {"fields": ("title", "description", "category", "is_urgent")},
         ),
         (
             "Location & Scheduling",
@@ -146,50 +148,26 @@ class ServiceRequestAdmin(admin.ModelAdmin):
                     "special_mark",
                     "preferred_date",
                     "preferred_time",
-                ),
+                )
             },
         ),
-        (
-            "Pricing",
-            {
-                "fields": ("estimated_price", "final_price"),
-            },
-        ),
+        ("Pricing & Payment", {"fields": _pricing_fields}),
         (
             "Decline Info",
-            {
-                "fields": ("decline_reason", "declined_at"),
-                "classes": ("collapse",),
-            },
+            {"fields": ("decline_reason", "declined_at"), "classes": ("collapse",)},
         ),
-        (
-            "Admin Notes",
-            {
-                "fields": ("admin_notes",),
-            },
-        ),
+        ("Admin Notes", {"fields": ("admin_notes",)}),
         (
             "Timestamps",
-            {
-                "fields": ("created_at", "updated_at"),
-                "classes": ("collapse",),
-            },
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )
 
-    # Non-pending requests — provider is readonly, shown as a link
     _change_fieldsets = (
-        (
-            "Status",
-            {
-                "fields": ("id", "status", "customer_link", "provider_link"),
-            },
-        ),
+        ("Status", {"fields": ("id", "status", "customer_link", "provider_link")}),
         (
             "Request Details",
-            {
-                "fields": ("title", "description", "category", "is_urgent"),
-            },
+            {"fields": ("title", "description", "category", "is_urgent")},
         ),
         (
             "Location & Scheduling",
@@ -203,35 +181,16 @@ class ServiceRequestAdmin(admin.ModelAdmin):
                     "special_mark",
                     "preferred_date",
                     "preferred_time",
-                ),
+                )
             },
         ),
-        (
-            "Pricing",
-            {
-                "fields": ("estimated_price", "final_price"),
-            },
-        ),
-        (
-            "Cancellation",
-            {
-                "fields": ("cancellation_info",),
-                "classes": ("collapse",),
-            },
-        ),
+        ("Pricing & Payment", {"fields": _pricing_fields}),
+        ("Cancellation", {"fields": ("cancellation_info",), "classes": ("collapse",)}),
         (
             "Decline Info",
-            {
-                "fields": ("decline_reason", "declined_at"),
-                "classes": ("collapse",),
-            },
+            {"fields": ("decline_reason", "declined_at"), "classes": ("collapse",)},
         ),
-        (
-            "Admin Notes",
-            {
-                "fields": ("admin_notes",),
-            },
-        ),
+        ("Admin Notes", {"fields": ("admin_notes",)}),
         (
             "Timestamps",
             {
@@ -257,7 +216,6 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         return self._change_fieldsets
 
     def get_readonly_fields(self, request, obj=None):
-        # Provider editable only on PENDING — locked after assignment
         if obj and obj.status != ServiceRequestStatus.PENDING:
             return self.readonly_fields + ("provider",)
         return self.readonly_fields
@@ -327,6 +285,23 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             obj.cancellation_reason or "—",
         )
 
+    @admin.display(description="Payment Breakdown")
+    def payment_summary(self, obj):
+        if obj.final_price is None:
+            return "—"
+        wallet = obj.wallet_amount or 0
+        card = obj.card_amount or 0
+        method = obj.get_payment_method_display()
+        lines = [f"<strong>Total:</strong> {obj.final_price}"]
+        if wallet:
+            lines.append(f"<strong>Wallet:</strong> {wallet}")
+        if card and obj.payment_method == "card":
+            lines.append(f"<strong>Card (Stripe):</strong> {card}")
+        elif card and obj.payment_method == "cash":
+            lines.append(f"<strong>Cash (provider collects):</strong> {card}")
+        lines.append(f"<strong>Method:</strong> {method}")
+        return format_html("<br>".join(lines))
+
     # ── Query optimisation ────────────────────────────────────
 
     def get_queryset(self, request):
@@ -339,16 +314,9 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     # ── Save — provider assignment via FSM ────────────────────
 
     def save_model(self, request, obj, form, change):
-        """
-        If a provider is selected on a PENDING request:
-          1. Save the request without the provider first.
-          2. Run FSM assign() which sets status=assigned, timestamps, counters.
-        This avoids a double save and keeps the FSM as the single source of truth.
-        """
         is_pending_with_provider = (
             obj.status == ServiceRequestStatus.PENDING and obj.provider_id
         )
-
         if is_pending_with_provider:
             provider = obj.provider
             obj.provider = None

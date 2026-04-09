@@ -28,8 +28,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.gis",
     "django.contrib.staticfiles",
-    "cloudinary_storage",
-    "cloudinary",
     "rest_framework",
     "knox",
     "corsheaders",
@@ -39,6 +37,7 @@ INSTALLED_APPS = [
     "apps.provider.apps.ProviderConfig",
     "apps.staff.apps.StaffConfig",
     "apps.booking.apps.BookingConfig",
+    "django_extensions",
 ]
 
 MIDDLEWARE = [
@@ -124,27 +123,15 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 
 # ── Media files ───────────────────────────────────────────────
-# Local:      Django serves from MEDIA_ROOT via /media/ (DEBUG only)
-# Production: Cloudinary stores and serves all uploaded files
+# Files are stored locally under MEDIA_ROOT and served by Django.
+# The Docker volume  media_files:/app/media  persists files across
+# container restarts and redeployments.
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
-
-_cloudinary_ready = all(
-    os.getenv(k)
-    for k in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET")
-)
-
-if _cloudinary_ready:
-    CLOUDINARY_STORAGE = {
-        "CLOUD_NAME": os.getenv("CLOUDINARY_CLOUD_NAME"),
-        "API_KEY": os.getenv("CLOUDINARY_API_KEY"),
-        "API_SECRET": os.getenv("CLOUDINARY_API_SECRET"),
-    }
-    DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
 
 
 # ── Auth ──────────────────────────────────────────────────────
@@ -245,3 +232,6 @@ if "test" in sys.argv:
         "handlers": {"null": {"class": "logging.NullHandler"}},
         "root": {"handlers": ["null"]},
     }
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_CURRENCY = "egp"

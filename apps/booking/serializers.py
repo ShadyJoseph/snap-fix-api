@@ -7,14 +7,13 @@ from apps.core.serializers import CategorySerializer, RegionSerializer
 from apps.customer.serializers import CustomerSerializer
 from apps.provider.serializers import ProviderSerializer
 
-from .models import Review, ServiceRequest
+from .choices import PaymentMethod
+from .models import Review, ServiceRequest, ServiceRequestPhoto
 
-# Average urban travel speed used for ETA estimation.
 _TRAVEL_SPEED_KMH = 30
 
 
 def _haversine_km(lat1, lon1, lat2, lon2):
-    """Straight-line distance between two WGS-84 coordinates in kilometres."""
     r = 6371.0
     φ1, φ2 = math.radians(lat1), math.radians(lat2)
     dφ = math.radians(lat2 - lat1)
@@ -24,16 +23,26 @@ def _haversine_km(lat1, lon1, lat2, lon2):
 
 
 def _travel_info(from_point, to_point):
-    """
-    Return (distance_km, eta_minutes) between two PointField values.
-    Returns (None, None) if the provider has no stored location yet.
-    `to_point` (the job location) is always set on new requests.
-    """
     if not from_point or not to_point:
         return None, None
     km = _haversine_km(from_point.y, from_point.x, to_point.y, to_point.x)
     eta = math.ceil(km / _TRAVEL_SPEED_KMH * 60)
     return round(km, 2), eta
+
+
+# ── Shared payment fields ─────────────────────────────────────────────────────
+
+PAYMENT_READ_FIELDS = [
+    "payment_method",
+    "payment_method_display",
+    "wallet_amount",
+    "card_amount",  # computed property
+    "payment_status",
+    "payment_status_display",
+]
+
+
+# ── Small reusables ───────────────────────────────────────────────────────────
 
 
 class ReviewSerializer(serializers.ModelSerializer):
@@ -44,21 +53,36 @@ class ReviewSerializer(serializers.ModelSerializer):
 
 
 class ReviewCreateSerializer(serializers.Serializer):
-    """Customer submits rating + optional comment."""
-
     rating = serializers.IntegerField(min_value=1, max_value=5)
     comment = serializers.CharField(required=False, allow_blank=True)
 
 
+class ServiceRequestPhotoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceRequestPhoto
+        fields = ["id", "image", "uploaded_at"]
+        read_only_fields = ["id", "uploaded_at"]
+
+
+# ── Create ────────────────────────────────────────────────────────────────────
+
+
 class ServiceRequestCreateSerializer(serializers.ModelSerializer):
-    latitude = serializers.FloatField(
-        write_only=True,
-        help_text="WGS-84 latitude of the service location.",
-    )
-    longitude = serializers.FloatField(
-        write_only=True,
-        help_text="WGS-84 longitude of the service location.",
-    )
+    """
+    Write serializer used for POST /requests/.
+
+    Payment split rules:
+      • wallet_amount defaults to 0.
+      • payment_method describes how the NON-wallet portion is paid:
+          WALLET → entire bill from wallet (wallet_amount == estimated_price or unknown yet)
+          CASH   → remainder collected by provider
+          CARD   → remainder charged via Stripe
+      • Wallet balance is validated here against estimated_price (if provided).
+        It is re-validated at quote approval against the real final_price.
+    """
+
+    latitude = serializers.FloatField(write_only=True)
+    longitude = serializers.FloatField(write_only=True)
 
     class Meta:
         model = ServiceRequest
@@ -79,6 +103,8 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
             "preferred_date",
             "preferred_time",
             "estimated_price",
+            "payment_method",
+            "wallet_amount",
         ]
         read_only_fields = ["id", "status"]
 
@@ -93,9 +119,44 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, data):
+        # Build Point from lat/lng.
         lat = data.pop("latitude")
         lng = data.pop("longitude")
         data["location"] = Point(x=lng, y=lat, srid=4326)
+
+        wallet_amount = data.get("wallet_amount", 0) or 0
+        payment_method = data.get("payment_method", PaymentMethod.CASH)
+        estimated_price = data.get("estimated_price")
+
+        # wallet_amount must be non-negative.
+        if wallet_amount < 0:
+            raise serializers.ValidationError(
+                {"wallet_amount": "Wallet amount cannot be negative."}
+            )
+
+        # For WALLET method, wallet_amount should cover the full cost.
+        # We can only enforce this against estimated_price here (real price isn't set yet).
+        if payment_method == PaymentMethod.WALLET and estimated_price is not None:
+            if wallet_amount < estimated_price:
+                # Auto-fill: if customer chose WALLET, treat wallet_amount as full price.
+                data["wallet_amount"] = estimated_price
+
+        # Validate wallet balance if wallet is used.
+        if wallet_amount > 0:
+            request = self.context.get("request")
+            if request and hasattr(request.user, "customer"):
+                customer = request.user.customer
+                if customer.wallet_balance < wallet_amount:
+                    raise serializers.ValidationError(
+                        {
+                            "wallet_amount": (
+                                f"Insufficient wallet balance. "
+                                f"Required: {wallet_amount}, "
+                                f"available: {customer.wallet_balance}."
+                            )
+                        }
+                    )
+
         return data
 
     def to_representation(self, instance):
@@ -105,21 +166,33 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
         return rep
 
 
+# ── Full read serializer ──────────────────────────────────────────────────────
+
+
 class ServiceRequestSerializer(serializers.ModelSerializer):
     """Full read serializer — used for list and action responses."""
 
     category = CategorySerializer(read_only=True)
     region = RegionSerializer(read_only=True)
+    photos = ServiceRequestPhotoSerializer(many=True, read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     cancelled_by_display = serializers.CharField(
         source="get_cancelled_by_display", read_only=True
     )
+    payment_method_display = serializers.CharField(
+        source="get_payment_method_display", read_only=True
+    )
+    payment_status_display = serializers.CharField(
+        source="get_payment_status_display", read_only=True
+    )
+    # Computed: final_price − wallet_amount
+    card_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
     review = ReviewSerializer(read_only=True)
     latitude = serializers.SerializerMethodField()
     longitude = serializers.SerializerMethodField()
-    # Populated by DB annotation in the open-pool view.
     distance_km = serializers.SerializerMethodField()
-    # Provider's current distance + ETA to the service location.
     provider_distance_km = serializers.SerializerMethodField()
     provider_eta_minutes = serializers.SerializerMethodField()
 
@@ -131,6 +204,7 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             "status_display",
             "category",
             "region",
+            "photos",
             "address",
             "floor_number",
             "apartment_number",
@@ -146,7 +220,16 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             "preferred_date",
             "preferred_time",
             "estimated_price",
+            "quoted_price",
             "final_price",
+            # Payment split
+            "payment_method",
+            "payment_method_display",
+            "wallet_amount",
+            "card_amount",
+            "payment_status",
+            "payment_status_display",
+            # Audit
             "cancelled_by",
             "cancelled_by_display",
             "cancellation_reason",
@@ -168,7 +251,6 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
         return obj.location.x
 
     def get_distance_km(self, obj):
-        """Populated only when the queryset annotates a `distance` value (provider open pool)."""
         if hasattr(obj, "distance") and obj.distance is not None:
             return round(obj.distance.km, 2)
         return None
@@ -188,34 +270,75 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
         return eta
 
 
-class ServiceRequestCompleteSerializer(serializers.Serializer):
-    """Provider submits final price on completion."""
-
-    final_price = serializers.DecimalField(
-        max_digits=10, decimal_places=2, min_value=0, required=False
-    )
+# ── Action serializers ────────────────────────────────────────────────────────
 
 
 class ServiceRequestCancelSerializer(serializers.Serializer):
-    """Customer or provider cancels with an optional reason."""
-
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
 class ServiceRequestDeclineSerializer(serializers.Serializer):
-    """Provider declines with an optional reason."""
-
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
-# ── History detail (full, role-aware) ────────────────────────
+class ProviderQuoteSerializer(serializers.Serializer):
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
+
+
+class CustomerApproveQuoteSerializer(serializers.Serializer):
+    """
+    Customer adjusts their payment split when approving a quote.
+
+    Fields:
+      wallet_amount — how much to deduct from wallet (0 = none).
+      payment_method — how to pay the remainder (CASH or CARD).
+                       Pass WALLET if the full amount comes from the wallet.
+
+    Both fields are optional. When omitted, the view preserves the values
+    already stored on the service request (set at booking time).
+    Validation is intentionally light here; the model's approve_quote()
+    performs the authoritative balance check inside a row lock.
+    """
+
+    wallet_amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=0,
+        required=False,
+    )
+    payment_method = serializers.ChoiceField(
+        choices=PaymentMethod.choices,
+        required=False,
+    )
+
+    def validate(self, data):
+        wallet_amount = data.get("wallet_amount", 0) or 0
+        if wallet_amount < 0:
+            raise serializers.ValidationError(
+                {"wallet_amount": "Wallet amount cannot be negative."}
+            )
+        return data
+
+
+class InitiateCardPaymentSerializer(serializers.Serializer):
+    """
+    Customer provides a Stripe PaymentMethod ID to attach to the request.
+    This is used to create/update the PaymentIntent before job completion.
+    """
+
+    stripe_payment_method_id = serializers.CharField(
+        max_length=255,
+        help_text="Stripe PaymentMethod ID (pm_xxx) from the client SDK.",
+    )
+
+
+# ── History detail serializers (role-aware) ───────────────────────────────────
 
 
 class CustomerRequestDetailSerializer(serializers.ModelSerializer):
-    """Full detail from the customer perspective — includes provider info + review."""
-
     category = CategorySerializer(read_only=True)
     region = RegionSerializer(read_only=True)
+    photos = ServiceRequestPhotoSerializer(many=True, read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     provider = ProviderSerializer(read_only=True)
     review = ReviewSerializer(read_only=True)
@@ -224,6 +347,15 @@ class CustomerRequestDetailSerializer(serializers.ModelSerializer):
     longitude = serializers.SerializerMethodField()
     provider_distance_km = serializers.SerializerMethodField()
     provider_eta_minutes = serializers.SerializerMethodField()
+    payment_method_display = serializers.CharField(
+        source="get_payment_method_display", read_only=True
+    )
+    payment_status_display = serializers.CharField(
+        source="get_payment_status_display", read_only=True
+    )
+    card_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
 
     class Meta:
         model = ServiceRequest
@@ -233,6 +365,7 @@ class CustomerRequestDetailSerializer(serializers.ModelSerializer):
             "status_display",
             "category",
             "region",
+            "photos",
             "address",
             "floor_number",
             "apartment_number",
@@ -247,7 +380,14 @@ class CustomerRequestDetailSerializer(serializers.ModelSerializer):
             "preferred_date",
             "preferred_time",
             "estimated_price",
+            "quoted_price",
             "final_price",
+            "payment_method",
+            "payment_method_display",
+            "wallet_amount",
+            "card_amount",
+            "payment_status",
+            "payment_status_display",
             "cancellation_reason",
             "decline_reason",
             "created_at",
@@ -289,18 +429,25 @@ class CustomerRequestDetailSerializer(serializers.ModelSerializer):
 
 
 class ProviderRequestDetailSerializer(serializers.ModelSerializer):
-    """Full detail from the provider perspective — includes customer info + review."""
-
     category = CategorySerializer(read_only=True)
     region = RegionSerializer(read_only=True)
+    photos = ServiceRequestPhotoSerializer(many=True, read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     customer = CustomerSerializer(read_only=True)
     review = ReviewSerializer(read_only=True)
     latitude = serializers.SerializerMethodField()
     longitude = serializers.SerializerMethodField()
-    # From the provider's perspective: how far am I from the job right now?
     distance_to_job_km = serializers.SerializerMethodField()
     eta_to_job_minutes = serializers.SerializerMethodField()
+    payment_method_display = serializers.CharField(
+        source="get_payment_method_display", read_only=True
+    )
+    payment_status_display = serializers.CharField(
+        source="get_payment_status_display", read_only=True
+    )
+    card_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
 
     class Meta:
         model = ServiceRequest
@@ -310,6 +457,7 @@ class ProviderRequestDetailSerializer(serializers.ModelSerializer):
             "status_display",
             "category",
             "region",
+            "photos",
             "address",
             "floor_number",
             "apartment_number",
@@ -324,7 +472,14 @@ class ProviderRequestDetailSerializer(serializers.ModelSerializer):
             "preferred_date",
             "preferred_time",
             "estimated_price",
+            "quoted_price",
             "final_price",
+            "payment_method",
+            "payment_method_display",
+            "wallet_amount",
+            "card_amount",
+            "payment_status",
+            "payment_status_display",
             "created_at",
             "assigned_at",
             "confirmed_at",

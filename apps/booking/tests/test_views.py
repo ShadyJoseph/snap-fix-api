@@ -1,91 +1,39 @@
+import sys
 import uuid
+from unittest.mock import MagicMock, patch
 
 from django.contrib.gis.geos import Point
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from apps.booking.choices import CancelledBy, ServiceRequestStatus
+from apps.booking.choices import (
+    CancelledBy,
+    PaymentMethod,
+    PaymentStatus,
+    ServiceRequestStatus,
+)
 from apps.booking.models import ServiceRequest
-from apps.core.models import Category, Region
-from apps.customer.models import Customer
-from apps.provider.choices import ProviderVerificationStatus
-from apps.provider.models import Provider
-
-TEST_PASSWORD = "testpass123"  # noqa: S105
-
-# Default pin-drop used by test factories (Cairo city centre).
-_CAIRO = Point(31.2357, 30.0444, srid=4326)
-
-
-# ── Factories ─────────────────────────────────────────────────────────────────
-
-
-def create_customer(**kwargs):
-    defaults = {
-        "email": "customer@test.com",
-        "first_name": "Test",
-        "last_name": "Customer",
-        "password": TEST_PASSWORD,
-        "is_active": True,
-    }
-    defaults.update(kwargs)
-    return Customer.objects.create_user(**defaults)
-
-
-def create_provider(**kwargs):
-    defaults = {
-        "email": "provider@test.com",
-        "first_name": "Test",
-        "last_name": "Provider",
-        "password": TEST_PASSWORD,
-        "is_active": True,
-        "verification_status": ProviderVerificationStatus.VERIFIED,
-    }
-    defaults.update(kwargs)
-    return Provider.objects.create_user(**defaults)
-
-
-def create_category(**kwargs):
-    defaults = {"name": "Plumbing", "slug": "plumbing", "is_active": True}
-    defaults.update(kwargs)
-    return Category.objects.get_or_create(slug=defaults["slug"], defaults=defaults)[0]
-
-
-def create_region(**kwargs):
-    defaults = {"name": "Cairo", "slug": "cairo", "code": "CAI", "is_active": True}
-    defaults.update(kwargs)
-    return Region.objects.get_or_create(slug=defaults["slug"], defaults=defaults)[0]
-
-
-def create_service_request(customer, category, region, **kwargs):
-    defaults = {
-        "title": "Fix leaking pipe",
-        "description": "Pipe under sink is leaking",
-        "address": "123 Test St",
-        "floor_number": "3",
-        "apartment_number": "12",
-        "special_mark": "Blue door on the left",
-        "location": _CAIRO,
-        "preferred_date": "2026-06-01",
-        "preferred_time": "10:00:00",
-        "is_urgent": False,
-    }
-    defaults.update(kwargs)
-    return ServiceRequest.objects.create(
-        customer=customer, category=category, region=region, **defaults
-    )
-
+from factories import (
+    make_category,
+    make_completed_request,
+    make_customer,
+    make_image,
+    make_provider,
+    make_region,
+    make_review,
+    make_service_request,
+)
 
 # ── Base ──────────────────────────────────────────────────────────────────────
 
 
 class BookingTestCase(APITestCase):
     def setUp(self):
-        self.customer = create_customer()
-        self.provider = create_provider()
-        self.category = create_category()
-        self.region = create_region()
+        self.customer = make_customer()
+        self.provider = make_provider()
+        self.category = make_category()
+        self.region = make_region()
         # Provider must have the category to see/pick matching requests.
         self.provider.categories.add(self.category)
 
@@ -96,9 +44,7 @@ class BookingTestCase(APITestCase):
         self.client.force_authenticate(user=self.provider)
 
     def make_request(self, **kwargs):
-        return create_service_request(
-            self.customer, self.category, self.region, **kwargs
-        )
+        return make_service_request(self.customer, self.category, self.region, **kwargs)
 
     def assign_to_provider(self, sr, provider=None):
         provider = provider or self.provider
@@ -119,28 +65,40 @@ class BookingTestCase(APITestCase):
         return data.get("results", data) if isinstance(data, dict) else data
 
 
-# ── Shared helpers ────────────────────────────────────────────────────────────
+def make_stripe_mock(
+    intent_id="pi_test123",
+    client_secret="pi_test123_secret_xxx",  # noqa: S107
+    capture_status="succeeded",
+):
+    """
+    Return (stripe_module_mock, fake_stripe_error_class) for injection into sys.modules.
 
+    Usage:
+        stripe_mod, fake_stripe_error = make_stripe_mock()
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(url, data)
 
-def make_completed_request(customer, provider, category, region, **kwargs):
-    """Create a service request already in COMPLETED state with a provider."""
-    sr = create_service_request(customer, category, region, **kwargs)
-    sr.status = ServiceRequestStatus.COMPLETED
-    sr.provider = provider
-    sr.save()
-    return sr
+    fake_stripe_error is a real Exception subclass so try/except stripe.error.StripeError
+    works correctly inside the patched context.
+    """
 
+    class FakeStripeError(Exception):
+        def __init__(self, message="Stripe error", user_message=None):
+            super().__init__(message)
+            self.user_message = user_message or message
 
-def create_review(service_request, customer, provider, rating=4, comment="Good work"):
-    from apps.booking.models import Review
+    mock_intent = MagicMock()
+    mock_intent.id = intent_id
+    mock_intent.client_secret = client_secret
+    mock_intent.status = capture_status
 
-    return Review.objects.create(
-        service_request=service_request,
-        customer=customer,
-        provider=provider,
-        rating=rating,
-        comment=comment,
+    stripe_mod = MagicMock()
+    stripe_mod.PaymentIntent.create.return_value = mock_intent
+    stripe_mod.PaymentIntent.capture.return_value = MagicMock(
+        id=intent_id, status=capture_status
     )
+    stripe_mod.error.StripeError = FakeStripeError
+    return stripe_mod, FakeStripeError
 
 
 # ── Unified: List + Create ────────────────────────────────────────────────────
@@ -167,18 +125,24 @@ class ServiceRequestListTests(BookingTestCase):
         payload.update(overrides)
         return payload
 
+    def _post_with_photo(self, **overrides):
+        """POST a valid create payload including one photo."""
+        return self.client.post(
+            self.url, {**self._valid_payload(**overrides), "photos": make_image()}
+        )
+
     # ── POST (customer only) ──────────────────────────────────
 
     def test_create_success_returns_pending(self):
         self.authenticate_customer()
-        response = self.client.post(self.url, self._valid_payload())
+        response = self._post_with_photo()
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["status"], ServiceRequestStatus.PENDING)
         self.assertIn("id", response.data)
 
     def test_create_assigns_customer_from_token(self):
         self.authenticate_customer()
-        response = self.client.post(self.url, self._valid_payload())
+        response = self._post_with_photo()
         sr = ServiceRequest.objects.get(id=response.data["id"])
         self.assertEqual(sr.customer, self.customer)
 
@@ -200,9 +164,9 @@ class ServiceRequestListTests(BookingTestCase):
 
     def test_customer_list_returns_own_requests_only(self):
         self.authenticate_customer()
-        other = create_customer(email="other@test.com")
+        other = make_customer(email="other@test.com")
         self.make_request()
-        create_service_request(other, self.category, self.region)
+        make_service_request(other, self.category, self.region)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(self.get_results(response)), 1)
@@ -233,7 +197,7 @@ class ServiceRequestListTests(BookingTestCase):
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
         )
-        create_review(sr, self.customer, self.provider, rating=5)
+        make_review(sr, self.customer, self.provider, rating=5)
         result = next(
             r
             for r in self.get_results(self.client.get(self.url))
@@ -273,7 +237,7 @@ class ServiceRequestListTests(BookingTestCase):
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
         )
-        create_review(sr, self.customer, self.provider, rating=3)
+        make_review(sr, self.customer, self.provider, rating=3)
         result = next(
             r
             for r in self.get_results(self.client.get(self.url))
@@ -298,8 +262,8 @@ class CustomerRequestDetailTests(BookingTestCase):
         self.assertEqual(str(response.data["id"]), str(sr.id))
 
     def test_get_other_customers_request_returns_404(self):
-        other = create_customer(email="other@test.com")
-        sr = create_service_request(other, self.category, self.region)
+        other = make_customer(email="other@test.com")
+        sr = make_service_request(other, self.category, self.region)
         self.authenticate_customer()
         response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -364,8 +328,8 @@ class CustomerCancelTests(BookingTestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_cannot_cancel_other_customers_request(self):
-        other = create_customer(email="other@test.com")
-        sr = create_service_request(other, self.category, self.region)
+        other = make_customer(email="other@test.com")
+        sr = make_service_request(other, self.category, self.region)
         self.authenticate_customer()
         response = self.client.post(self._cancel_url(sr), {})
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -394,7 +358,7 @@ class ProviderIncomingTests(BookingTestCase):
         )
 
         # different provider — should NOT appear
-        other_provider = create_provider(email="other@provider.com")
+        other_provider = make_provider(email="other@provider.com")
         other_sr = self.assign_to_provider(
             self.make_request(title="Other Provider Job"), provider=other_provider
         )
@@ -439,11 +403,30 @@ class ProviderAcceptTests(BookingTestCase):
         sr.provider = self.provider
         sr.save()
         response = self.client.post(self._accept_url(sr))
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_cannot_accept_quoted_request_bypasses_customer_approval(self):
+        """
+        A provider must NOT be able to call /accept/ on a QUOTED request.
+        Doing so would bypass the customer's price approval and set CONFIRMED
+        with no final_price / final_price — the job would complete for free.
+        """
+        self.authenticate_provider()
+        sr = self.make_request()
+        sr.status = ServiceRequestStatus.QUOTED
+        sr.provider = self.provider
+        sr.quoted_price = "150.00"
+        sr.save()
+        response = self.client.post(self._accept_url(sr))
+        # Endpoint filters by ASSIGNED — QUOTED request is invisible → 404
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.QUOTED)  # unchanged
+        self.assertIsNone(sr.final_price)  # price was never locked
 
     def test_cannot_accept_other_providers_request(self):
         self.authenticate_provider()
-        other_provider = create_provider(email="other@provider.com")
+        other_provider = make_provider(email="other@provider.com")
         sr = self.assign_to_provider(self.make_request(), provider=other_provider)
         response = self.client.post(self._accept_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -491,7 +474,7 @@ class ProviderDeclineTests(BookingTestCase):
 
     def test_cannot_decline_other_providers_request(self):
         self.authenticate_provider()
-        other_provider = create_provider(email="other@provider.com")
+        other_provider = make_provider(email="other@provider.com")
         sr = self.assign_to_provider(self.make_request(), provider=other_provider)
         response = self.client.post(self._decline_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -536,28 +519,31 @@ class ProviderCompleteTests(BookingTestCase):
     def _complete_url(self, sr):
         return reverse("bookings:request-complete", args=[sr.id])
 
-    def _in_progress_request(self):
-        sr = self.make_request()
+    def _in_progress_request(self, **kwargs):
+        sr = self.make_request(**kwargs)
         self.set_status(sr, ServiceRequestStatus.IN_PROGRESS, provider=self.provider)
         return sr
 
-    def test_complete_with_final_price(self):
-        self.authenticate_provider()
-        sr = self._in_progress_request()
-        response = self.client.post(self._complete_url(sr), {"final_price": "150.00"})
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
-        self.assertEqual(str(sr.final_price), "150.00")
-        self.assertIsNotNone(sr.completed_at)
-
-    def test_complete_without_price_is_allowed(self):
+    def test_complete_transitions_to_completed_and_marks_paid(self):
+        """Cash job (default): completes successfully, payment_status=paid immediately."""
         self.authenticate_provider()
         sr = self._in_progress_request()
         response = self.client.post(self._complete_url(sr), {})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+        self.assertIsNotNone(sr.completed_at)
+
+    def test_complete_without_final_price_is_allowed(self):
+        """No final_price set (no quote step done): completes with amount=0, still PAID."""
+        self.authenticate_provider()
+        sr = self._in_progress_request()
+        response = self.client.post(self._complete_url(sr), {})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
 
     def test_cannot_complete_confirmed_request(self):
         self.authenticate_provider()
@@ -608,7 +594,7 @@ class ProviderCancelTests(BookingTestCase):
 
     def test_cannot_cancel_other_providers_request(self):
         self.authenticate_provider()
-        other_provider = create_provider(email="other@provider.com")
+        other_provider = make_provider(email="other@provider.com")
         sr = self.assign_to_provider(self.make_request(), provider=other_provider)
         response = self.client.post(self._cancel_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -711,6 +697,15 @@ class ProviderPickRequestTests(BookingTestCase):
         response = self.client.post(self._pick_url(second))
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_cannot_pick_if_already_has_quoted_job(self):
+        """QUOTED status must also block picking a second job."""
+        self.authenticate_provider()
+        quoted = self.make_request(title="Quoted Job")
+        self.set_status(quoted, ServiceRequestStatus.QUOTED, provider=self.provider)
+        second = self.make_request(title="Second Job")
+        response = self.client.post(self._pick_url(second))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_can_pick_after_previous_job_completed(self):
         """Completed jobs must not block picking a new one."""
         self.authenticate_provider()
@@ -723,7 +718,7 @@ class ProviderPickRequestTests(BookingTestCase):
     def test_cannot_pick_already_assigned_request(self):
         """A request grabbed by another provider is no longer pending."""
         self.authenticate_provider()
-        other_provider = create_provider(email="other@provider.com")
+        other_provider = make_provider(email="other@provider.com")
         sr = self.assign_to_provider(self.make_request(), provider=other_provider)
         response = self.client.post(self._pick_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -749,7 +744,7 @@ class ProviderPickRequestTests(BookingTestCase):
     def test_two_providers_race_only_one_wins(self):
         """Both providers attempt to pick the same request — exactly one succeeds."""
         sr = self.make_request()
-        second_provider = create_provider(email="second@provider.com")
+        second_provider = make_provider(email="second@provider.com")
         second_provider.categories.add(self.category)
 
         self.client.force_authenticate(user=self.provider)
@@ -772,14 +767,14 @@ class ProviderPickRequestTests(BookingTestCase):
 
 class FullLifecycleRegressionTest(BookingTestCase):
     """
-    Walks a request through every valid state.
+    Walks a request through every valid state using the full new flow.
     Guards against regressions that break the happy path.
 
-        pending → assigned → confirmed → in_progress → completed
+        pending → assigned → quoted → confirmed → in_progress → completed
     """
 
     def test_full_happy_path(self):
-        # 1. Customer creates request
+        # 1. Customer creates request (with photo — required)
         self.authenticate_customer()
         response = self.client.post(
             reverse("bookings:request-list-create"),
@@ -796,12 +791,14 @@ class FullLifecycleRegressionTest(BookingTestCase):
                 "description": "Testing every step",
                 "preferred_date": "2026-06-01",
                 "preferred_time": "10:00:00",
+                "photos": make_image(),
             },
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         sr_id = response.data["id"]
         sr = ServiceRequest.objects.get(id=sr_id)
         self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
+        self.assertEqual(len(response.data["photos"]), 1)
 
         # 2. Admin assigns provider (direct model call)
         sr.assign(self.provider)
@@ -810,33 +807,48 @@ class FullLifecycleRegressionTest(BookingTestCase):
         self.assertEqual(sr.provider, self.provider)
         self.assertIsNotNone(sr.assigned_at)
 
-        # 3. Provider accepts
+        # 3. Provider quotes a price → QUOTED
         self.authenticate_provider()
-        response = self.client.post(reverse("bookings:request-accept", args=[sr_id]))
+        response = self.client.post(
+            reverse("bookings:request-quote", args=[sr_id]), {"price": "200.00"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.QUOTED)
+        self.assertEqual(str(sr.quoted_price), "200.00")
+
+        # 4. Customer approves the quote → CONFIRMED, price locked
+        self.authenticate_customer()
+        response = self.client.post(
+            reverse("bookings:request-approve-quote", args=[sr_id])
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
         self.assertIsNotNone(sr.confirmed_at)
+        self.assertEqual(str(sr.final_price), "200.00")
+        self.assertEqual(str(sr.final_price), "200.00")
 
-        # 4. Provider starts
+        # 5. Provider starts
+        self.authenticate_provider()
         response = self.client.post(reverse("bookings:request-start", args=[sr_id]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
         self.assertIsNotNone(sr.started_at)
 
-        # 5. Provider completes
+        # 6. Provider completes — final_price locked, no body param needed
         response = self.client.post(
-            reverse("bookings:request-complete", args=[sr_id]),
-            {"final_price": "200.00"},
+            reverse("bookings:request-complete", args=[sr_id]), {}
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
-        self.assertEqual(str(sr.final_price), "200.00")
+        self.assertEqual(str(sr.final_price), "200.00")  # locked from final_price
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)  # cash default
         self.assertIsNotNone(sr.completed_at)
 
-        # 6. Verify terminal — no further transitions allowed
+        # 7. Verify terminal — no further transitions allowed
         response = self.client.post(
             reverse("bookings:request-complete", args=[sr_id]), {}
         )
@@ -872,29 +884,27 @@ class DeclineAndReassignRegressionTest(BookingTestCase):
         self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
         self.assertIsNone(sr.provider)
         self.assertEqual(sr.decline_reason, "Unavailable")
-        self.assertIsNotNone(
-            sr.declined_at
-        )  # audit trail stamped, request still pending
+        self.assertIsNotNone(sr.declined_at)
 
         # 3. Admin reassigns to second provider
-        second_provider = create_provider(email="second@provider.com")
+        second_provider = make_provider(email="second@provider.com")
         sr.assign(second_provider)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
         self.assertEqual(sr.provider, second_provider)
 
-        # 4. Second provider accepts → starts → completes
+        # 4. Second provider uses admin override path (accept → start → complete)
         self.client.force_authenticate(user=second_provider)
         self.client.post(reverse("bookings:request-accept", args=[sr.id]))
         self.client.post(reverse("bookings:request-start", args=[sr.id]))
         response = self.client.post(
-            reverse("bookings:request-complete", args=[sr.id]),
-            {"final_price": "300.00"},
+            reverse("bookings:request-complete", args=[sr.id]), {}
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
         self.assertEqual(sr.provider, second_provider)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
 
 
 class InvalidTransitionRegressionTest(BookingTestCase):
@@ -933,7 +943,7 @@ class InvalidTransitionRegressionTest(BookingTestCase):
         sr = self.make_request()
         self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
         response = self.client.post(reverse("bookings:request-accept", args=[sr.id]))
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_cannot_cancel_completed_request(self):
         """COMPLETED is terminal — customer cannot cancel."""
@@ -950,11 +960,11 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
     """
     Provider picks from the open pool and completes the full lifecycle.
 
-        pending → (provider picks) → assigned → confirmed → in_progress → completed
+        pending → (provider picks) → assigned → quoted → confirmed → in_progress → completed
     """
 
     def test_pick_then_full_lifecycle(self):
-        # 1. Customer creates request
+        # 1. Customer creates request (with photo)
         self.authenticate_customer()
         response = self.client.post(
             reverse("bookings:request-list-create"),
@@ -971,6 +981,7 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
                 "description": "Provider picks from pool",
                 "preferred_date": "2026-06-01",
                 "preferred_time": "10:00:00",
+                "photos": make_image(),
             },
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -997,18 +1008,18 @@ class ProviderSelfAssignLifecycleTest(BookingTestCase):
         incoming_ids = [r["id"] for r in self.get_results(incoming)]
         self.assertIn(sr_id, incoming_ids)
 
-        # 6. Standard flow: accept → start → complete
+        # 6. Provider uses admin-override accept → start → complete
         self.client.post(reverse("bookings:request-accept", args=[sr_id]))
         self.client.post(reverse("bookings:request-start", args=[sr_id]))
         response = self.client.post(
-            reverse("bookings:request-complete", args=[sr_id]),
-            {"final_price": "250.00"},
+            reverse("bookings:request-complete", args=[sr_id]), {}
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
         sr = ServiceRequest.objects.get(id=sr_id)
         self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
         self.assertEqual(sr.provider, self.provider)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
 
 
 # ── Rating ────────────────────────────────────────────────────────────────────
@@ -1051,11 +1062,10 @@ class CustomerRateProviderTests(BookingTestCase):
     def test_idempotent_second_rate_returns_existing_review(self):
         self.authenticate_customer()
         sr = self._completed_sr()
-        create_review(sr, self.customer, self.provider, rating=4)
+        make_review(sr, self.customer, self.provider, rating=4)
         response = self.client.post(
             self._rate_url(sr), {"rating": 1, "comment": "Different"}
         )
-        # Returns existing review, not the new payload
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["rating"], 4)
 
@@ -1089,7 +1099,7 @@ class CustomerRateProviderTests(BookingTestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_other_customers_request_returns_404(self):
-        other = create_customer(email="other2@test.com")
+        other = make_customer(email="other2@test.com")
         sr = make_completed_request(other, self.provider, self.category, self.region)
         self.authenticate_customer()
         response = self.client.post(self._rate_url(sr), {"rating": 5})
@@ -1147,13 +1157,13 @@ class HistoryDetailTests(BookingTestCase):
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
         )
-        create_review(sr, self.customer, self.provider, rating=4, comment="Solid")
+        make_review(sr, self.customer, self.provider, rating=4, comment="Solid")
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.data["review"]["rating"], 4)
         self.assertEqual(response.data["review"]["comment"], "Solid")
 
     def test_customer_other_request_returns_404(self):
-        other = create_customer(email="other4@test.com")
+        other = make_customer(email="other4@test.com")
         sr = make_completed_request(other, self.provider, self.category, self.region)
         self.authenticate_customer()
         response = self.client.get(self._detail_url(sr))
@@ -1185,12 +1195,12 @@ class HistoryDetailTests(BookingTestCase):
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
         )
-        create_review(sr, self.customer, self.provider, rating=2, comment="Meh")
+        make_review(sr, self.customer, self.provider, rating=2, comment="Meh")
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.data["review"]["rating"], 2)
 
     def test_provider_other_job_returns_404(self):
-        other_provider = create_provider(email="other6@provider.com")
+        other_provider = make_provider(email="other6@provider.com")
         sr = make_completed_request(
             self.customer, other_provider, self.category, self.region
         )
@@ -1201,11 +1211,10 @@ class HistoryDetailTests(BookingTestCase):
     # ── Cross-role isolation ──────────────────────────────────────────────────
 
     def test_provider_token_on_customer_request_returns_404(self):
-        # Provider queries are scoped to their assigned jobs — customer's request is invisible
         sr = make_completed_request(
             self.customer, self.provider, self.category, self.region
         )
-        other_provider = create_provider(email="cross@provider.com")
+        other_provider = make_provider(email="cross@provider.com")
         self.client.force_authenticate(user=other_provider)
         response = self.client.get(self._detail_url(sr))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -1246,7 +1255,7 @@ class LocationFieldsTests(BookingTestCase):
 
     def _post(self, payload):
         self.authenticate_customer()
-        return self.client.post(self.url, payload)
+        return self.client.post(self.url, {**payload, "photos": make_image()})
 
     def test_missing_latitude_returns_400(self):
         payload = self._full_payload()
@@ -1313,12 +1322,12 @@ class CategoryFilteredOpenPoolTests(BookingTestCase):
 
     def setUp(self):
         super().setUp()
-        self.other_category = create_category(name="Electrical", slug="electrical")
+        self.other_category = make_category(name="Electrical", slug="electrical")
 
     def test_only_matching_category_requests_shown(self):
         self.authenticate_provider()
         matching = self.make_request(title="Plumbing Job")
-        other_sr = create_service_request(
+        other_sr = make_service_request(
             self.customer, self.other_category, self.region, title="Electrical Job"
         )
 
@@ -1328,7 +1337,7 @@ class CategoryFilteredOpenPoolTests(BookingTestCase):
         self.assertNotIn(str(other_sr.id), ids)
 
     def test_provider_with_no_categories_sees_empty_pool(self):
-        provider_no_cats = create_provider(email="nocats@provider.com")
+        provider_no_cats = make_provider(email="nocats@provider.com")
         self.client.force_authenticate(user=provider_no_cats)
         self.make_request()
         response = self.client.get(self.url)
@@ -1338,7 +1347,7 @@ class CategoryFilteredOpenPoolTests(BookingTestCase):
         self.provider.categories.add(self.other_category)
         self.authenticate_provider()
         plumbing = self.make_request(title="Plumbing Job")
-        electrical = create_service_request(
+        electrical = make_service_request(
             self.customer, self.other_category, self.region, title="Electrical Job"
         )
 
@@ -1355,14 +1364,12 @@ class CategoryGuardPickTests(BookingTestCase):
 
     def setUp(self):
         super().setUp()
-        self.other_category = create_category(name="Electrical", slug="electrical")
+        self.other_category = make_category(name="Electrical", slug="electrical")
 
     def test_pick_request_in_other_category_returns_404(self):
         """Direct URL manipulation must not bypass the category guard."""
         self.authenticate_provider()
-        other_sr = create_service_request(
-            self.customer, self.other_category, self.region
-        )
+        other_sr = make_service_request(self.customer, self.other_category, self.region)
         response = self.client.post(
             reverse("bookings:request-pick", args=[other_sr.id])
         )
@@ -1477,7 +1484,6 @@ class DistanceAndETATests(BookingTestCase):
         self.assertIsNotNone(data["provider_eta_minutes"])
 
     def test_eta_is_positive_integer(self):
-        # Provider ~30 km north — at 30 km/h should be ~60 min
         self._set_provider_location(30.314, 31.2357)
         sr = self.assign_to_provider(self.make_request())
         self.authenticate_customer()
@@ -1518,3 +1524,748 @@ class DistanceAndETATests(BookingTestCase):
         )
         self.assertTrue(len(results) > 0)
         self.assertIsNone(results[0]["distance_km"])
+
+
+# ── Photos ────────────────────────────────────────────────────────────────────
+
+
+class ServiceRequestPhotoTests(BookingTestCase):
+    """Customer must upload ≥1 photo at booking time. Photos are visible to the provider."""
+
+    url = reverse("bookings:request-list-create")
+
+    def _base_payload(self, **overrides):
+        payload = {
+            "category": self.category.id,
+            "region": self.region.id,
+            "address": "123 Test St",
+            "floor_number": "3",
+            "apartment_number": "12",
+            "special_mark": "Blue door on the left",
+            "latitude": 30.0444,
+            "longitude": 31.2357,
+            "title": "Fix leaking pipe",
+            "description": "Pipe under sink is leaking",
+            "preferred_date": "2026-06-01",
+            "preferred_time": "10:00:00",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_create_with_one_photo_succeeds(self):
+        self.authenticate_customer()
+        response = self.client.post(
+            self.url, {**self._base_payload(), "photos": make_image()}
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["photos"]), 1)
+
+    def test_create_without_photos_returns_400(self):
+        self.authenticate_customer()
+        response = self.client.post(self.url, self._base_payload())
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photos", response.data)
+
+    def test_create_with_more_than_5_photos_returns_400(self):
+        self.authenticate_customer()
+        photos = [make_image(f"photo_{i}.png") for i in range(6)]
+        response = self.client.post(
+            self.url, {**self._base_payload(), "photos": photos}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photos", response.data)
+
+    def test_photos_returned_in_response_with_correct_shape(self):
+        self.authenticate_customer()
+        response = self.client.post(
+            self.url, {**self._base_payload(), "photos": make_image()}
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        photos = response.data["photos"]
+        self.assertEqual(len(photos), 1)
+        self.assertIn("id", photos[0])
+        self.assertIn("image", photos[0])
+        self.assertIn("uploaded_at", photos[0])
+
+    def test_provider_can_see_photos_on_assigned_request(self):
+        """Photos must be visible to the provider so they can estimate the price."""
+        sr = self.make_request()
+        from apps.booking.models import ServiceRequestPhoto
+
+        ServiceRequestPhoto.objects.create(
+            service_request=sr,
+            image=make_image(),
+        )
+        self.assign_to_provider(sr)
+
+        self.authenticate_provider()
+        response = self.client.get(reverse("bookings:request-detail", args=[sr.id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["photos"]), 1)
+        self.assertIn("image", response.data["photos"][0])
+
+    def test_multiple_photos_all_returned(self):
+        self.authenticate_customer()
+        photos = [make_image(f"p{i}.png") for i in range(3)]
+        response = self.client.post(
+            self.url, {**self._base_payload(), "photos": photos}
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["photos"]), 3)
+
+
+# ── Provider: Quote ───────────────────────────────────────────────────────────
+
+
+class ProviderQuoteViewTests(BookingTestCase):
+    """Provider submits a price quote after picking an assigned request."""
+
+    def _quote_url(self, sr):
+        return reverse("bookings:request-quote", args=[sr.id])
+
+    def test_quote_assigned_request_transitions_to_quoted(self):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request())
+        response = self.client.post(self._quote_url(sr), {"price": "150.00"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.QUOTED)
+        self.assertEqual(str(sr.quoted_price), "150.00")
+        self.assertEqual(response.data["status"], ServiceRequestStatus.QUOTED)
+        self.assertEqual(str(response.data["quoted_price"]), "150.00")
+
+    def test_quote_wrong_provider_returns_404(self):
+        """Provider cannot quote another provider's request."""
+        self.authenticate_provider()
+        other_provider = make_provider(email="other@provider.com")
+        sr = self.assign_to_provider(self.make_request(), provider=other_provider)
+        response = self.client.post(self._quote_url(sr), {"price": "100.00"})
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_quote_non_assigned_request_returns_404(self):
+        """Provider can only quote requests in ASSIGNED status."""
+        self.authenticate_provider()
+        sr = self.make_request()
+        sr.provider = self.provider
+        sr.save()  # PENDING with provider set — not ASSIGNED
+        response = self.client.post(self._quote_url(sr), {"price": "100.00"})
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_quote_negative_price_returns_400(self):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request())
+        response = self.client.post(self._quote_url(sr), {"price": "-10.00"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_quote_zero_price_is_allowed(self):
+        """Zero price is a valid quote (free job)."""
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request())
+        response = self.client.post(self._quote_url(sr), {"price": "0.00"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.QUOTED)
+
+    def test_customer_cannot_quote(self):
+        sr = self.assign_to_provider(self.make_request())
+        self.authenticate_customer()
+        response = self.client.post(self._quote_url(sr), {"price": "100.00"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_returns_401(self):
+        sr = self.assign_to_provider(self.make_request())
+        response = self.client.post(self._quote_url(sr), {"price": "100.00"})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ── Customer: Quote Approval ──────────────────────────────────────────────────
+
+
+class CustomerQuoteApprovalTests(BookingTestCase):
+    """Customer approves or rejects the provider's price quote."""
+
+    def _approve_url(self, sr):
+        return reverse("bookings:request-approve-quote", args=[sr.id])
+
+    def _reject_url(self, sr):
+        return reverse("bookings:request-reject-quote", args=[sr.id])
+
+    def _quoted_request(self, quoted_price="150.00"):
+        """SR in QUOTED state with a price set."""
+        sr = self.make_request()
+        sr.status = ServiceRequestStatus.QUOTED
+        sr.provider = self.provider
+        sr.quoted_price = quoted_price
+        sr.save()
+        return sr
+
+    def test_approve_quote_confirms_and_locks_price(self):
+        self.authenticate_customer()
+        sr = self._quoted_request(quoted_price="150.00")
+        response = self.client.post(self._approve_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
+        self.assertIsNotNone(sr.confirmed_at)
+        self.assertEqual(str(sr.final_price), "150.00")
+        self.assertEqual(str(sr.final_price), "150.00")
+
+    def test_reject_quote_returns_to_pending_and_decrements_jobs(self):
+        self.authenticate_customer()
+        self.provider.total_jobs = 1
+        self.provider.save()
+        sr = self._quoted_request()
+        response = self.client.post(self._reject_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
+        self.assertIsNone(sr.provider_id)
+        self.assertIsNone(sr.quoted_price)
+        self.assertIsNone(sr.assigned_at)
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.total_jobs, 0)
+
+    def test_rejected_request_reappears_in_open_pool(self):
+        """After rejection, the request returns to the pool for another provider."""
+        self.provider.total_jobs = 1
+        self.provider.save()
+        sr = self._quoted_request()
+        self.authenticate_customer()
+        self.client.post(self._reject_url(sr))
+        self.authenticate_provider()
+        response = self.client.get(reverse("bookings:request-open-pool"))
+        ids = [str(r["id"]) for r in self.get_results(response)]
+        self.assertIn(str(sr.id), ids)
+
+    def test_reject_quote_wrong_customer_returns_404(self):
+        other = make_customer(email="other@test.com")
+        sr = self._quoted_request()
+        self.client.force_authenticate(user=other)
+        response = self.client.post(self._reject_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_approve_non_quoted_request_returns_404(self):
+        """Approve endpoint filters by status=QUOTED; non-QUOTED request is invisible."""
+        self.authenticate_customer()
+        sr = self.assign_to_provider(self.make_request())  # ASSIGNED, not QUOTED
+        response = self.client.post(self._approve_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_provider_cannot_approve_quote(self):
+        sr = self._quoted_request()
+        self.authenticate_provider()
+        response = self.client.post(self._approve_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_returns_401(self):
+        sr = self._quoted_request()
+        response = self.client.post(self._approve_url(sr))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    # ── Payment split body params ─────────────────────────────
+
+    def test_approve_quote_with_wallet_amount_updates_split(self):
+        """wallet_amount sent in body is persisted and respected."""
+        self.customer.wallet_balance = "200.00"
+        self.customer.save()
+        self.authenticate_customer()
+        sr = self._quoted_request(quoted_price="100.00")
+        response = self.client.post(
+            self._approve_url(sr), {"wallet_amount": "60.00", "payment_method": "cash"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
+        self.assertEqual(str(sr.wallet_amount), "60.00")
+        self.assertEqual(sr.payment_method, PaymentMethod.CASH)
+
+    def test_approve_quote_with_card_payment_method_stored(self):
+        """payment_method=card accepted; no Stripe call at this stage."""
+        self.authenticate_customer()
+        sr = self._quoted_request(quoted_price="100.00")
+        response = self.client.post(self._approve_url(sr), {"payment_method": "card"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
+        self.assertEqual(sr.payment_method, PaymentMethod.CARD)
+
+    def test_approve_quote_wallet_method_auto_fills_wallet_amount(self):
+        """payment_method=wallet → wallet_amount automatically set to full quoted_price."""
+        self.customer.wallet_balance = "200.00"
+        self.customer.save()
+        self.authenticate_customer()
+        sr = self._quoted_request(quoted_price="100.00")
+        response = self.client.post(self._approve_url(sr), {"payment_method": "wallet"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(str(sr.wallet_amount), "100.00")
+        self.assertEqual(sr.payment_method, PaymentMethod.WALLET)
+
+    def test_approve_quote_omitting_body_preserves_existing_split(self):
+        """No body → wallet_amount and payment_method already on SR are kept."""
+        self.customer.wallet_balance = "200.00"
+        self.customer.save()
+        self.authenticate_customer()
+        sr = self._quoted_request(quoted_price="100.00")
+        sr.wallet_amount = "50.00"
+        sr.payment_method = PaymentMethod.CASH
+        sr.save()
+        response = self.client.post(self._approve_url(sr))  # no body
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(str(sr.wallet_amount), "50.00")
+        self.assertEqual(sr.payment_method, PaymentMethod.CASH)
+
+    def test_approve_quote_insufficient_wallet_returns_400(self):
+        """wallet_amount exceeds customer wallet_balance → 400, status unchanged."""
+        self.customer.wallet_balance = "30.00"
+        self.customer.save()
+        self.authenticate_customer()
+        sr = self._quoted_request(quoted_price="100.00")
+        response = self.client.post(
+            self._approve_url(sr), {"wallet_amount": "60.00", "payment_method": "cash"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.QUOTED)  # not advanced
+
+
+# ── Customer: Initiate Card Payment ──────────────────────────────────────────
+
+
+class InitiateCardPaymentTests(BookingTestCase):
+    """
+    POST /bookings/requests/<id>/initiate-card-payment/
+
+    Only valid when payment_method == CARD and card_amount > 0.
+    Creates a Stripe PaymentIntent (manual capture) and stores its ID.
+    """
+
+    def _url(self, sr):
+        return reverse("bookings:request-initiate-card-payment", args=[sr.id])
+
+    def _confirmed_card_sr(self, final_price="100.00", wallet_amount="0.00"):
+        """SR in CONFIRMED status with CARD payment method."""
+        sr = self.make_request()
+        sr.status = ServiceRequestStatus.CONFIRMED
+        sr.provider = self.provider
+        sr.final_price = final_price
+        sr.wallet_amount = wallet_amount
+        sr.payment_method = PaymentMethod.CARD
+        sr.save()
+        return sr
+
+    def test_happy_path_creates_intent_stores_id_returns_secret(self):
+        """Creates PaymentIntent, stores stripe_payment_intent_id, returns client_secret."""
+        stripe_mod, _ = make_stripe_mock(
+            intent_id="pi_abc123",
+            client_secret="pi_abc123_secret",  # noqa: S106
+        )
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr(final_price="100.00")
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(
+                self._url(sr), {"stripe_payment_method_id": "pm_test"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["stripe_client_secret"], "pi_abc123_secret")
+        sr.refresh_from_db()
+        self.assertEqual(sr.stripe_payment_intent_id, "pi_abc123")
+
+        create_call = stripe_mod.PaymentIntent.create.call_args
+        self.assertEqual(create_call.kwargs["amount"], 10000)  # 100.00 * 100
+        self.assertEqual(create_call.kwargs["capture_method"], "manual")
+        self.assertEqual(create_call.kwargs["confirm"], True)
+
+    def test_partial_wallet_card_amount_sent_to_stripe(self):
+        """Stripe is charged only the card_amount (final_price - wallet_amount)."""
+        stripe_mod, _ = make_stripe_mock()
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr(final_price="100.00", wallet_amount="40.00")
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(
+                self._url(sr), {"stripe_payment_method_id": "pm_test"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        create_call = stripe_mod.PaymentIntent.create.call_args
+        self.assertEqual(create_call.kwargs["amount"], 6000)  # 60.00 * 100
+
+    def test_wrong_payment_method_not_card_returns_400(self):
+        """payment_method=cash → 400; only CARD needs this step."""
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr()
+        sr.payment_method = PaymentMethod.CASH
+        sr.save()
+        response = self.client.post(
+            self._url(sr), {"stripe_payment_method_id": "pm_test"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_wallet_covers_full_price_returns_400(self):
+        """wallet_amount == final_price → card_amount == 0 → 400."""
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr(final_price="100.00", wallet_amount="100.00")
+        response = self.client.post(
+            self._url(sr), {"stripe_payment_method_id": "pm_test"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_wrong_status_pending_returns_404(self):
+        """Status must be CONFIRMED or IN_PROGRESS; PENDING returns 404."""
+        self.authenticate_customer()
+        sr = self.make_request()
+        sr.payment_method = PaymentMethod.CARD
+        sr.final_price = "100.00"
+        sr.save()  # PENDING
+        response = self.client.post(
+            self._url(sr), {"stripe_payment_method_id": "pm_test"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_in_progress_status_accepted(self):
+        """IN_PROGRESS is also a valid status for this endpoint."""
+        stripe_mod, _ = make_stripe_mock()
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr()
+        sr.status = ServiceRequestStatus.IN_PROGRESS
+        sr.save()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(
+                self._url(sr), {"stripe_payment_method_id": "pm_test"}
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_stripe_error_returns_400_with_message(self):
+        """Stripe raises StripeError → 400 with the error message."""
+        stripe_mod, fake_stripe_error = make_stripe_mock()  # N806
+        stripe_mod.PaymentIntent.create.side_effect = fake_stripe_error(
+            user_message="Your card was declined."
+        )
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(
+                self._url(sr), {"stripe_payment_method_id": "pm_test"}
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Stripe error", str(response.data))
+
+    def test_missing_stripe_payment_method_id_returns_400(self):
+        """Serializer requires stripe_payment_method_id → 400 when omitted."""
+        stripe_mod, _ = make_stripe_mock()
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._url(sr), {})  # no PM ID
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        stripe_mod.PaymentIntent.create.assert_not_called()
+
+    def test_wrong_customer_returns_404(self):
+        """Other customer cannot access this request."""
+        other = make_customer(email="other@test.com")
+        sr = self._confirmed_card_sr()
+        self.client.force_authenticate(user=other)
+        response = self.client.post(
+            self._url(sr), {"stripe_payment_method_id": "pm_test"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_provider_cannot_initiate_returns_403(self):
+        sr = self._confirmed_card_sr()
+        self.authenticate_provider()
+        response = self.client.post(
+            self._url(sr), {"stripe_payment_method_id": "pm_test"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_returns_401(self):
+        sr = self._confirmed_card_sr()
+        response = self.client.post(
+            self._url(sr), {"stripe_payment_method_id": "pm_test"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# ── Provider: Complete + Payment ──────────────────────────────────────────────
+
+
+class ProviderCompletePaymentTests(BookingTestCase):
+    """
+    Payment rules at completion:
+      CASH   → payment_status=PAID immediately (honor system). No available_balance credit.
+      WALLET → deduct customer wallet (select_for_update).
+               Sufficient  → PAID, credit available_balance.
+               Insufficient → PENDING, do NOT credit available_balance.
+    """
+
+    def _complete_url(self, sr):
+        return reverse("bookings:request-complete", args=[sr.id])
+
+    def _in_progress_with_price(self, final_price="100.00", **kwargs):
+        """SR in IN_PROGRESS with final_price set."""
+        sr = self.make_request(**kwargs)
+        sr.final_price = final_price
+        if sr.payment_method == PaymentMethod.WALLET and not getattr(
+            sr, "wallet_amount", None
+        ):
+            sr.wallet_amount = final_price
+        sr.status = ServiceRequestStatus.IN_PROGRESS
+        sr.provider = self.provider
+        sr.save()
+        return sr
+
+    def test_cash_complete_marks_paid_no_available_balance_credit(self):
+        """Cash: PAID immediately. Platform never received money → no available_balance."""
+        self.authenticate_provider()
+        self.provider.available_balance = "0.00"
+        self.provider.total_earnings = "0.00"
+        self.provider.save()
+        sr = self._in_progress_with_price(final_price="100.00")  # default cash
+
+        response = self.client.post(self._complete_url(sr), {})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.completed_jobs, 1)
+        self.assertEqual(str(self.provider.total_earnings), "100.00")
+        self.assertEqual(str(self.provider.available_balance), "0.00")  # untouched
+
+    def test_wallet_sufficient_marks_paid_and_credits_both(self):
+        """Wallet, sufficient balance: PAID, customer debited, provider available_balance credited."""
+        self.authenticate_provider()
+        self.customer.wallet_balance = "200.00"
+        self.customer.save()
+        self.provider.available_balance = "0.00"
+        self.provider.total_earnings = "0.00"
+        self.provider.save()
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.WALLET
+        )
+
+        response = self.client.post(self._complete_url(sr), {})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+        self.customer.refresh_from_db()
+        self.assertEqual(str(self.customer.wallet_balance), "100.00")  # debited
+        self.provider.refresh_from_db()
+        self.assertEqual(str(self.provider.total_earnings), "100.00")
+        self.assertEqual(str(self.provider.available_balance), "100.00")  # credited
+
+    def test_wallet_insufficient_returns_400(self):
+        """Wallet, insufficient balance: raises 400."""
+        self.authenticate_provider()
+        self.customer.wallet_balance = "50.00"
+        self.customer.save()
+        self.provider.available_balance = "0.00"
+        self.provider.total_earnings = "0.00"
+        self.provider.save()
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.WALLET
+        )
+
+        response = self.client.post(self._complete_url(sr), {})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
+
+    def test_complete_uses_final_price_body_param_ignored(self):
+        """Body params are ignored — complete() uses final_price set at quote approval."""
+        self.authenticate_provider()
+        sr = self._in_progress_with_price(final_price="150.00")
+        response = self.client.post(self._complete_url(sr), {"final_price": "999.00"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(str(sr.final_price), "150.00")  # locked, not 999
+
+    def test_complete_without_final_price_uses_zero(self):
+        """No quote step done → final_price=None → amount=0 → PAID with zero."""
+        self.authenticate_provider()
+        sr = self.make_request()
+        sr.status = ServiceRequestStatus.IN_PROGRESS
+        sr.provider = self.provider
+        sr.save()  # final_price=None
+
+        response = self.client.post(self._complete_url(sr), {})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+
+    # ── CARD payment tests ────────────────────────────────────
+
+    def test_card_complete_captures_stripe_marks_paid_credits_provider(self):
+        """
+        CARD: Stripe PaymentIntent captured, payment_status=PAID,
+        provider available_balance credited for the full card amount.
+        """
+        stripe_mod, _ = make_stripe_mock(
+            intent_id="pi_card_test", capture_status="succeeded"
+        )
+        self.authenticate_provider()
+        self.provider.available_balance = "0.00"
+        self.provider.total_earnings = "0.00"
+        self.provider.save()
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.CARD
+        )
+        sr.stripe_payment_intent_id = "pi_card_test"
+        sr.save()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._complete_url(sr))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+        stripe_mod.PaymentIntent.capture.assert_called_once_with("pi_card_test")
+        self.provider.refresh_from_db()
+        self.assertEqual(str(self.provider.total_earnings), "100.00")
+        self.assertEqual(str(self.provider.available_balance), "100.00")
+
+    def test_card_complete_missing_intent_id_returns_400_and_rolls_back(self):
+        """
+        CARD with no stripe_payment_intent_id → 400.
+        Customer must call /initiate-card-payment/ first.
+        SR stays IN_PROGRESS; Stripe is never contacted.
+        """
+        stripe_mod, _ = make_stripe_mock()
+        self.authenticate_provider()
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.CARD
+        )
+        # stripe_payment_intent_id defaults to ""
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._complete_url(sr))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)  # rolled back
+        stripe_mod.PaymentIntent.capture.assert_not_called()
+
+    def test_card_complete_stripe_capture_fails_returns_400_and_rolls_back(self):
+        """
+        Stripe capture raises StripeError → 400, SR stays IN_PROGRESS.
+        The @transaction.atomic on complete() rolls back any partial wallet deduction.
+        """
+        stripe_mod, fake_stripe_error = make_stripe_mock()  # N806 fix
+        stripe_mod.PaymentIntent.capture.side_effect = fake_stripe_error(
+            user_message="Insufficient funds"
+        )
+        self.authenticate_provider()
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.CARD
+        )
+        sr.stripe_payment_intent_id = "pi_will_fail"
+        sr.save()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._complete_url(sr))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
+
+    def test_card_partial_wallet_deducts_wallet_and_captures_card_remainder(self):
+        """
+        Hybrid split: wallet_amount=40, card_amount=60, final_price=100.
+        Wallet is deducted from customer, card remainder captured via Stripe.
+        Provider available_balance credited for both portions.
+        """
+        stripe_mod, _ = make_stripe_mock(intent_id="pi_hybrid")
+        self.authenticate_provider()
+        self.customer.wallet_balance = "100.00"
+        self.customer.save()
+        self.provider.available_balance = "0.00"
+        self.provider.total_earnings = "0.00"
+        self.provider.save()
+
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.CARD
+        )
+        sr.wallet_amount = "40.00"
+        sr.stripe_payment_intent_id = "pi_hybrid"
+        sr.save()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._complete_url(sr))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+
+        self.customer.refresh_from_db()
+        self.assertEqual(str(self.customer.wallet_balance), "60.00")  # 100 - 40
+
+        stripe_mod.PaymentIntent.capture.assert_called_once_with("pi_hybrid")
+
+        self.provider.refresh_from_db()
+        self.assertEqual(str(self.provider.total_earnings), "100.00")
+        self.assertEqual(str(self.provider.available_balance), "100.00")
+
+    def test_card_wallet_only_split_skips_stripe_capture(self):
+        """
+        payment_method=CARD but wallet covers 100% → card_amount=0
+        → _capture_stripe_payment is not reached, no Stripe call.
+        """
+        stripe_mod, _ = make_stripe_mock()
+        self.authenticate_provider()
+        self.customer.wallet_balance = "200.00"
+        self.customer.save()
+
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.CARD
+        )
+        sr.wallet_amount = "100.00"  # covers everything
+        sr.stripe_payment_intent_id = "pi_not_needed"
+        sr.save()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._complete_url(sr))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.payment_status, PaymentStatus.PAID)
+        stripe_mod.PaymentIntent.capture.assert_not_called()
+
+    def test_card_stripe_failure_rolls_back_wallet_deduction(self):
+        """
+        Hybrid split: wallet deducted first, then Stripe fails.
+        The @transaction.atomic on complete() must roll back the wallet deduction.
+        """
+        stripe_mod, fake_stripe_error = make_stripe_mock()  # N806 fix
+        stripe_mod.PaymentIntent.capture.side_effect = fake_stripe_error(
+            user_message="Card declined"
+        )
+        self.authenticate_provider()
+        self.customer.wallet_balance = "100.00"
+        self.customer.save()
+
+        sr = self._in_progress_with_price(
+            final_price="100.00", payment_method=PaymentMethod.CARD
+        )
+        sr.wallet_amount = "40.00"
+        sr.stripe_payment_intent_id = "pi_will_fail"
+        sr.save()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(self._complete_url(sr))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.customer.refresh_from_db()
+        self.assertEqual(str(self.customer.wallet_balance), "100.00")
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)

@@ -1,35 +1,12 @@
-import io
-
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from knox.models import AuthToken
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.customer.models import Customer
-from apps.provider.choices import ProviderVerificationStatus
-from apps.provider.models import Provider
+from factories import make_customer, make_image, make_provider
 
-# ──────────────────────────────
-# Test constants
-# ──────────────────────────────
-TEST_PASSWORD = "secure-test-pass-123"
-
-
-def create_customer(**kwargs):
-    defaults = {
-        "email": "customer@test.com",
-        "first_name": "John",
-        "last_name": "Doe",
-        "phone": "01012345678",
-        "password": TEST_PASSWORD,
-    }
-    defaults.update(kwargs)
-    password = defaults.pop("password")
-    customer = Customer(**defaults)
-    customer.set_password(password)
-    customer.save()
-    return customer
+TEST_PASSWORD = "secure-test-pass-123"  # noqa: S105
 
 
 class CustomerRegisterTests(APITestCase):
@@ -50,7 +27,7 @@ class CustomerRegisterTests(APITestCase):
         self.assertTrue(Customer.objects.filter(email=payload["email"]).exists())
 
     def test_register_duplicate_email(self):
-        create_customer(email="existing@test.com")
+        make_customer(email="existing@test.com")
         payload = {
             "email": "existing@test.com",
             "first_name": "Jane",
@@ -81,7 +58,7 @@ class CustomerLoginTests(APITestCase):
     url = reverse("customers:customer-login")
 
     def setUp(self):
-        self.customer = create_customer(email="customer@test.com")
+        self.customer = make_customer(email="customer@test.com", password=TEST_PASSWORD)
 
     def test_login_success(self):
         response = self.client.post(
@@ -132,7 +109,7 @@ class CustomerLogoutTests(APITestCase):
     url = reverse("customers:customer-logout")
 
     def setUp(self):
-        self.customer = create_customer()
+        self.customer = make_customer()
         _, self.token = AuthToken.objects.create(self.customer)
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token}")
 
@@ -150,7 +127,7 @@ class CustomerProfileTests(APITestCase):
     url = reverse("customers:customer-profile")
 
     def setUp(self):
-        self.customer = create_customer()
+        self.customer = make_customer()
         _, self.token = AuthToken.objects.create(self.customer)
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token}")
 
@@ -170,7 +147,7 @@ class CustomerProfileUpdateTests(APITestCase):
     url = reverse("customers:customer-profile")
 
     def setUp(self):
-        self.customer = create_customer()
+        self.customer = make_customer()
         _, token = AuthToken.objects.create(self.customer)
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
 
@@ -216,12 +193,7 @@ class CustomerProfileUpdateTests(APITestCase):
         self.assertEqual(self.customer.wallet_balance, original_balance)
 
     def test_patch_profile_picture_upload(self):
-        from PIL import Image
-
-        buf = io.BytesIO()
-        Image.new("RGB", (1, 1)).save(buf, format="PNG")
-        buf.seek(0)
-        image = SimpleUploadedFile("avatar.png", buf.read(), content_type="image/png")
+        image = make_image("avatar.png")
         response = self.client.patch(
             self.url, {"profile_picture": image}, format="multipart"
         )
@@ -239,32 +211,16 @@ class CustomerProfileUpdateTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_provider_token_returns_403(self):
-        provider = create_provider(email="prov_patch@test.com")
+        provider = make_provider(email="prov_patch@test.com")
         self.client.force_authenticate(user=provider)
         response = self.client.patch(self.url, {"first_name": "X"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def create_provider(**kwargs):
-    defaults = {
-        "email": "provider@test.com",
-        "first_name": "Test",
-        "last_name": "Provider",
-        "password": TEST_PASSWORD,
-        "is_active": True,
-        "verification_status": ProviderVerificationStatus.VERIFIED,
-    }
-    defaults.update(kwargs)
-    return Provider.objects.create_user(**defaults)
-
-
 class FavoritesTestCase(APITestCase):
     def setUp(self):
-        self.customer = create_customer(email="fav_customer@test.com")
-        self.provider = create_provider(email="fav_provider@test.com")
+        self.customer = make_customer(email="fav_customer@test.com")
+        self.provider = make_provider(email="fav_provider@test.com")
         self.client.force_authenticate(user=self.customer)
 
     def _toggle_url(self, provider=None):
@@ -336,7 +292,7 @@ class CustomerFavoritesListTests(FavoritesTestCase):
         self.assertEqual(str(results[0]["id"]), str(self.provider.pk))
 
     def test_does_not_return_non_favorited_providers(self):
-        other = create_provider(email="other_prov@test.com")
+        other = make_provider(email="other_prov@test.com")
         self.customer.favorite_providers.add(self.provider)
         response = self.client.get(self.url)
         results = response.data.get("results", response.data)

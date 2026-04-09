@@ -1,6 +1,3 @@
-import io
-
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from knox.models import AuthToken
 from rest_framework import status
@@ -8,37 +5,10 @@ from rest_framework.test import APITestCase
 
 from apps.provider.choices import ProviderVerificationStatus
 from apps.provider.models import Provider
+from factories import make_image, make_provider
 
-TEST_PASSWORD = "TestPass123!"
+TEST_PASSWORD = "TestPass123!"  # noqa: S105
 TEST_PHONE = "01012345678"
-
-
-def create_provider(active=True, verified=True, **kwargs):
-    defaults = {
-        "email": "provider@test.com",
-        "first_name": "Jane",
-        "last_name": "Smith",
-        "phone": TEST_PHONE,
-        "password": TEST_PASSWORD,
-    }
-    defaults.update(kwargs)
-
-    password = defaults.pop("password")
-
-    provider = Provider(
-        **defaults,
-        is_active=active,
-        verification_status=(
-            ProviderVerificationStatus.VERIFIED
-            if verified
-            else ProviderVerificationStatus.PENDING
-        ),
-    )
-
-    provider.set_password(password)
-    provider.save()
-
-    return provider
 
 
 class ProviderRegisterTests(APITestCase):
@@ -80,7 +50,7 @@ class ProviderRegisterTests(APITestCase):
         self.assertNotIn("token", response.data)
 
     def test_register_duplicate_email(self):
-        create_provider(email="existing@test.com")
+        make_provider(email="existing@test.com")
 
         payload = {
             "email": "existing@test.com",
@@ -112,7 +82,7 @@ class ProviderLoginTests(APITestCase):
     url = reverse("providers:provider-login")
 
     def setUp(self):
-        self.provider = create_provider(
+        self.provider = make_provider(
             email="provider@test.com",
             password=TEST_PASSWORD,
             active=True,
@@ -144,7 +114,7 @@ class ProviderLoginTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_login_inactive_account(self):
-        inactive = create_provider(
+        inactive = make_provider(
             email="inactive@test.com",
             password=TEST_PASSWORD,
             active=False,
@@ -162,7 +132,7 @@ class ProviderLoginTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_login_unverified_account(self):
-        unverified = create_provider(
+        unverified = make_provider(
             email="unverified@test.com",
             password=TEST_PASSWORD,
             active=True,
@@ -195,7 +165,7 @@ class ProviderLogoutTests(APITestCase):
     url = reverse("providers:provider-logout")
 
     def setUp(self):
-        self.provider = create_provider()
+        self.provider = make_provider()
         _, self.token = AuthToken.objects.create(self.provider)
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token}")
@@ -217,7 +187,7 @@ class ProviderProfileTests(APITestCase):
     url = reverse("providers:provider-profile")
 
     def setUp(self):
-        self.provider = create_provider()
+        self.provider = make_provider()
         _, self.token = AuthToken.objects.create(self.provider)
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {self.token}")
@@ -243,7 +213,7 @@ class ProviderProfileUpdateTests(APITestCase):
     url = reverse("providers:provider-profile")
 
     def setUp(self):
-        self.provider = create_provider()
+        self.provider = make_provider()
         _, token = AuthToken.objects.create(self.provider)
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
 
@@ -297,12 +267,7 @@ class ProviderProfileUpdateTests(APITestCase):
         self.assertEqual(self.provider.verification_status, original_status)
 
     def test_patch_profile_picture_upload(self):
-        from PIL import Image
-
-        buf = io.BytesIO()
-        Image.new("RGB", (1, 1)).save(buf, format="PNG")
-        buf.seek(0)
-        image = SimpleUploadedFile("avatar.png", buf.read(), content_type="image/png")
+        image = make_image("avatar.png")
         response = self.client.patch(
             self.url, {"profile_picture": image}, format="multipart"
         )

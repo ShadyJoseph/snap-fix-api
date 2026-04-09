@@ -1,12 +1,18 @@
 import uuid
 
 from django.contrib.gis.db import models
-from django.core.validators import MinValueValidator
+from django.core.validators import FileExtensionValidator, MinValueValidator
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
-from .choices import CancelledBy, ServiceRequestStatus
+from .choices import (
+    CancelledBy,
+    PaymentMethod,
+    PaymentStatus,
+    ServiceRequestStatus,
+    max_length,
+)
 
 
 class ServiceRequest(models.Model):
@@ -14,14 +20,24 @@ class ServiceRequest(models.Model):
     Core transaction model for the platform.
 
     State Flow:
-        pending -> assigned -> confirmed -> in_progress -> completed
-        assigned -> declined (back to pending for admin to reassign)
+        pending → assigned → quoted → confirmed → in_progress → completed
+        quoted  → pending  (customer rejects quote)
+        assigned → pending (provider declines)
         cancelled (from any non-terminal state)
+
+    Payment flow:
+        • Customer picks payment_method + wallet_amount at request creation.
+        • wallet_amount is re-validated at quote approval.
+        • Payment is settled at completion:
+            - Wallet portion: deducted from customer wallet.
+            - CARD remainder: Stripe PaymentIntent captured.
+            - CASH remainder: honor-system; provider collects in person.
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # --- Parties ---
+    # ── Parties ───────────────────────────────────────────────
+
     customer = models.ForeignKey(
         "customer.Customer",
         on_delete=models.PROTECT,
@@ -35,7 +51,8 @@ class ServiceRequest(models.Model):
         related_name="service_requests",
     )
 
-    # --- What & Where ---
+    # ── What & Where ──────────────────────────────────────────
+
     category = models.ForeignKey(
         "core.Category",
         on_delete=models.PROTECT,
@@ -61,10 +78,11 @@ class ServiceRequest(models.Model):
         help_text="Apartment or unit number",
     )
     special_mark = models.TextField(
-        help_text="Landmark or navigation instructions for the provider",
+        help_text="Landmark or navigation instructions for the provider"
     )
 
-    # --- Description ---
+    # ── Description ───────────────────────────────────────────
+
     title = models.CharField(max_length=200)
     description = models.TextField()
     is_urgent = models.BooleanField(
@@ -72,18 +90,28 @@ class ServiceRequest(models.Model):
         help_text="Customer flagged this as urgent",
     )
 
-    # --- Scheduling ---
+    # ── Scheduling ────────────────────────────────────────────
+
     preferred_date = models.DateField()
     preferred_time = models.TimeField()
 
-    # --- Pricing ---
+    # ── Pricing ───────────────────────────────────────────────
+
     estimated_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
         null=True,
         blank=True,
         validators=[MinValueValidator(0)],
-        help_text="Price estimated at booking time",
+        help_text="Customer's rough estimate at booking time (informational only)",
+    )
+    quoted_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Price submitted by the provider",
     )
     final_price = models.DecimalField(
         max_digits=10,
@@ -91,35 +119,65 @@ class ServiceRequest(models.Model):
         null=True,
         blank=True,
         validators=[MinValueValidator(0)],
-        help_text="Actual price after job completion",
+        help_text="Locked from quoted_price when customer approves. "
+        "This is the single authoritative amount due.",
     )
 
-    # --- Status ---
+    # ── Payment ───────────────────────────────────────────────
+
+    payment_method = models.CharField(
+        max_length=max_length(PaymentMethod),
+        choices=PaymentMethod.choices,
+        default=PaymentMethod.CASH,
+        help_text=(
+            "How the non-wallet portion is paid. "
+            "WALLET = full amount from wallet; "
+            "CASH = remainder collected by provider; "
+            "CARD = remainder charged via Stripe."
+        ),
+    )
+    wallet_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text=(
+            "Amount the customer pre-commits to pay from their wallet. "
+            "Must be ≤ final_price. Can be 0 (no wallet used)."
+        ),
+    )
+    payment_status = models.CharField(
+        max_length=max_length(PaymentStatus),
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.PENDING,
+        db_index=True,
+    )
+    # Stripe PaymentIntent ID — populated when card payment is initiated.
+    stripe_payment_intent_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Stripe PaymentIntent ID for card payments",
+    )
+
+    # ── Status & Audit ────────────────────────────────────────
+
     status = models.CharField(
-        max_length=max(len(v) for v in ServiceRequestStatus.values),
+        max_length=max_length(ServiceRequestStatus),
         choices=ServiceRequestStatus.choices,
         default=ServiceRequestStatus.PENDING,
         db_index=True,
     )
-
-    # --- Cancellation ---
     cancelled_by = models.CharField(
-        max_length=max(len(v) for v in CancelledBy.values),
+        max_length=max_length(CancelledBy),
         choices=CancelledBy.choices,
         blank=True,
     )
     cancellation_reason = models.TextField(blank=True)
-
-    # --- Decline ---
     decline_reason = models.TextField(blank=True)
+    admin_notes = models.TextField(blank=True)
 
-    # --- Admin Notes ---
-    admin_notes = models.TextField(
-        blank=True,
-        help_text="Internal notes (not visible to customer/provider)",
-    )
+    # ── Timestamps ────────────────────────────────────────────
 
-    # --- Timestamps ---
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     assigned_at = models.DateTimeField(null=True, blank=True)
@@ -143,12 +201,50 @@ class ServiceRequest(models.Model):
         ]
 
     def __str__(self):
-        return f"#{str(self.id)[:8].upper()} | {self.category} | {self.get_status_display()}"
+        return (
+            f"#{str(self.id)[:8].upper()} | {self.category} | "
+            f"{self.get_status_display()}"
+        )
 
-    # ── FSM Guard Checks ──────────────────────────────────────
+    # ── Derived helpers ───────────────────────────────────────
+
+    @property
+    def card_amount(self):
+        """Amount to be charged to the card (final_price - wallet_amount)."""
+        if self.final_price is None:
+            return None
+        return max(self.final_price - (self.wallet_amount or 0), 0)
+
+    def _validate_wallet_funds(self, amount, error_message):
+        """
+        Helper method to lock the customer and validate wallet balance.
+        Should be called within a transaction.atomic block.
+        """
+        if amount <= 0:
+            return None
+        locked_customer = self.customer.__class__.objects.select_for_update().get(
+            pk=self.customer_id
+        )
+        if locked_customer.wallet_balance < amount:
+            raise ValueError(
+                f"{error_message} "
+                f"Required: {amount}, available: {locked_customer.wallet_balance}."
+            )
+        return locked_customer
+
+    # ── FSM Guards ────────────────────────────────────────────
 
     def can_assign(self):
         return self.status == ServiceRequestStatus.PENDING
+
+    def can_quote(self):
+        return self.status == ServiceRequestStatus.ASSIGNED
+
+    def can_approve_quote(self):
+        return self.status == ServiceRequestStatus.QUOTED
+
+    def can_reject_quote(self):
+        return self.status == ServiceRequestStatus.QUOTED
 
     def can_confirm(self):
         return self.status == ServiceRequestStatus.ASSIGNED
@@ -172,7 +268,7 @@ class ServiceRequest(models.Model):
 
     @transaction.atomic
     def assign(self, provider):
-        """Admin assigns a provider. Transitions: pending → assigned."""
+        """Admin assigns a provider. pending → assigned."""
         if not self.can_assign():
             raise ValueError(
                 f"Cannot assign from '{self.get_status_display()}' status."
@@ -187,26 +283,20 @@ class ServiceRequest(models.Model):
 
     @transaction.atomic
     def self_assign(self, provider):
-        """Provider picks a pending request from the open pool.
-
-        Transitions: pending → assigned.
-        Guard: provider must have no active (assigned/confirmed/in_progress) jobs.
-        Uses select_for_update to prevent two providers grabbing the same request.
-        """
-        # Re-fetch with a row lock to prevent race conditions
+        """Provider picks a request from the open pool. pending → assigned."""
         obj = ServiceRequest.objects.select_for_update().get(pk=self.pk)
         if obj.status != ServiceRequestStatus.PENDING:
             raise ValueError("This request is no longer available.")
 
         active_statuses = [
             ServiceRequestStatus.ASSIGNED,
+            ServiceRequestStatus.QUOTED,
             ServiceRequestStatus.CONFIRMED,
             ServiceRequestStatus.IN_PROGRESS,
         ]
-        has_active = ServiceRequest.objects.filter(
+        if ServiceRequest.objects.filter(
             provider=provider, status__in=active_statuses
-        ).exists()
-        if has_active:
+        ).exists():
             raise ValueError(
                 "You already have an active job. "
                 "Complete or cancel it before picking a new one."
@@ -216,25 +306,122 @@ class ServiceRequest(models.Model):
         obj.status = ServiceRequestStatus.ASSIGNED
         obj.assigned_at = timezone.now()
         obj.save(update_fields=["provider", "status", "assigned_at", "updated_at"])
-
         provider.__class__.objects.filter(pk=provider.pk).update(
             total_jobs=F("total_jobs") + 1
         )
-        # Sync the in-memory instance so the caller gets fresh data
         self.refresh_from_db()
 
+    def quote(self, price):
+        """Provider submits their price. assigned → quoted."""
+        if not self.can_quote():
+            raise ValueError(f"Cannot quote from '{self.get_status_display()}' status.")
+        self.quoted_price = price
+        self.status = ServiceRequestStatus.QUOTED
+        self.save(update_fields=["quoted_price", "status", "updated_at"])
+
+    @transaction.atomic
+    def approve_quote(self):
+        """
+        Customer approves the quoted price. quoted → confirmed.
+
+        Locks quoted_price → final_price.
+        Re-validates wallet_amount against the now-known final price and
+        the customer's current balance.
+
+        Raises ValueError if wallet funds are insufficient — caller must
+        redirect the customer to adjust their payment split.
+        """
+        if not self.can_approve_quote():
+            raise ValueError(
+                f"Cannot approve quote from '{self.get_status_display()}' status."
+            )
+
+        self.final_price = self.quoted_price
+
+        # Re-validate wallet portion now that the real price is known.
+        wallet_amount = self.wallet_amount or 0
+        if wallet_amount > 0:
+            if wallet_amount > self.final_price:
+                raise ValueError(
+                    f"Wallet amount ({wallet_amount}) exceeds the quoted price "
+                    f"({self.final_price}). Please adjust your payment."
+                )
+            self._validate_wallet_funds(
+                wallet_amount,
+                "Insufficient wallet balance. Please reduce your wallet contribution or switch payment method.",
+            )
+
+        self.status = ServiceRequestStatus.CONFIRMED
+        self.confirmed_at = timezone.now()
+        self.save(
+            update_fields=[
+                "final_price",
+                "status",
+                "confirmed_at",
+                "updated_at",
+            ]
+        )
+
+    @transaction.atomic
+    def reject_quote(self):
+        """Customer rejects the price. quoted → pending (back to pool)."""
+        if not self.can_reject_quote():
+            raise ValueError(
+                f"Cannot reject quote from '{self.get_status_display()}' status."
+            )
+        self.provider.__class__.objects.filter(pk=self.provider_id).update(
+            total_jobs=F("total_jobs") - 1
+        )
+        self.status = ServiceRequestStatus.PENDING
+        self.provider = None
+        self.assigned_at = None
+        self.quoted_price = None
+        self.save(
+            update_fields=[
+                "status",
+                "provider",
+                "assigned_at",
+                "quoted_price",
+                "updated_at",
+            ]
+        )
+
+    @transaction.atomic
     def confirm(self):
-        """Provider accepts the assignment. Transitions: assigned → confirmed."""
+        """Provider skips quote and accepts directly. assigned → confirmed."""
         if not self.can_confirm():
             raise ValueError(
                 f"Cannot confirm from '{self.get_status_display()}' status."
             )
+
+        self.final_price = self.estimated_price
+
+        # Re-validate wallet portion against the now-set final price.
+        wallet_amount = self.wallet_amount or 0
+        if wallet_amount > 0:
+            if wallet_amount > self.final_price:
+                wallet_amount = self.final_price
+                self.wallet_amount = wallet_amount
+
+            self._validate_wallet_funds(
+                wallet_amount,
+                "Customer has insufficient wallet balance for this price. Please submit a quote instead.",
+            )
+
         self.status = ServiceRequestStatus.CONFIRMED
         self.confirmed_at = timezone.now()
-        self.save(update_fields=["status", "confirmed_at", "updated_at"])
+        self.save(
+            update_fields=[
+                "final_price",
+                "wallet_amount",
+                "status",
+                "confirmed_at",
+                "updated_at",
+            ]
+        )
 
     def start(self):
-        """Provider starts work. Transitions: confirmed → in_progress."""
+        """Provider starts work. confirmed → in_progress."""
         if not self.can_start():
             raise ValueError(f"Cannot start from '{self.get_status_display()}' status.")
         self.status = ServiceRequestStatus.IN_PROGRESS
@@ -242,38 +429,122 @@ class ServiceRequest(models.Model):
         self.save(update_fields=["status", "started_at", "updated_at"])
 
     @transaction.atomic
-    def complete(self, final_price=None):
-        """Provider completes the job. Transitions: in_progress → completed."""
+    def complete(self):
+        """
+        Provider marks the job done. in_progress → completed.
+
+        Payment is settled here in full:
+
+        1. Wallet portion (wallet_amount):
+           - Deducted from customer balance with a row lock.
+           - If balance is now insufficient, raises ValueError (should not
+             happen if approve_quote() validated correctly, but guards against
+             race conditions / manual balance changes).
+
+        2. Card portion (final_price - wallet_amount):
+           - If payment_method == CARD: Stripe PaymentIntent is captured.
+           - If payment_method == CASH: honor-system; provider collects cash.
+
+        3. Provider balances are updated only once everything succeeds.
+        """
         if not self.can_complete():
             raise ValueError(
                 f"Cannot complete from '{self.get_status_display()}' status."
             )
-        update_fields = ["status", "completed_at", "updated_at"]
-        if final_price is not None:
-            self.final_price = final_price
-            update_fields.append("final_price")
+
+        final = self.final_price or 0
+        wallet_portion = min(self.wallet_amount or 0, final)
+        remainder = final - wallet_portion
+
+        # ── Step 1: Deduct wallet ─────────────────────────────
+        if wallet_portion > 0:
+            locked_customer = self._validate_wallet_funds(
+                wallet_portion, "Insufficient wallet balance at completion."
+            )
+            locked_customer.__class__.objects.filter(pk=self.customer_id).update(
+                wallet_balance=F("wallet_balance") - wallet_portion
+            )
+
+        # ── Step 2: Settle remainder ──────────────────────────
+        if self.payment_method == PaymentMethod.CASH:
+            # Provider collects cash directly — platform marks as paid on trust.
+            self.payment_status = PaymentStatus.PAID
+
+        elif self.payment_method == PaymentMethod.CARD:
+            if remainder > 0:
+                self._capture_stripe_payment(remainder)
+            self.payment_status = PaymentStatus.PAID
+
+        elif self.payment_method == PaymentMethod.WALLET:
+            # Pure wallet — wallet_portion covers everything.
+            self.payment_status = PaymentStatus.PAID
+
+        # ── Step 3: Finalise request ──────────────────────────
         self.status = ServiceRequestStatus.COMPLETED
         self.completed_at = timezone.now()
-        self.save(update_fields=update_fields)
+        self.save(
+            update_fields=["status", "completed_at", "payment_status", "updated_at"]
+        )
 
+        # ── Step 4: Credit provider ───────────────────────────
         if self.provider_id:
+            # available_balance: wallet & card amounts are platform-collected.
+            # Cash remainder goes directly to the provider — not credited here.
+            platform_collected = wallet_portion + (
+                remainder if self.payment_method == PaymentMethod.CARD else 0
+            )
             self.provider.__class__.objects.filter(pk=self.provider_id).update(
                 completed_jobs=F("completed_jobs") + 1,
-                total_earnings=F("total_earnings") + (self.final_price or 0),
-                available_balance=F("available_balance") + (self.final_price or 0),
+                total_earnings=F("total_earnings") + final,
+                available_balance=F("available_balance") + platform_collected,
             )
+
         self.customer.__class__.objects.filter(pk=self.customer_id).update(
             total_bookings=F("total_bookings") + 1
         )
 
+    def _capture_stripe_payment(self, amount):
+        """
+        Capture the Stripe PaymentIntent for the card portion.
+        Uses the test environment only.
+        Raises ValueError if capture fails so complete() can abort atomically.
+        """
+        import stripe
+        from django.conf import settings
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY  # test key from settings
+
+        try:
+            if not self.stripe_payment_intent_id:
+                raise ValueError(
+                    "No Stripe PaymentIntent ID found. The customer must initiate "
+                    "card payment before the job can be completed."
+                )
+
+            # PaymentIntent already created (e.g. during approve_quote).
+            # Capture it now that the job is done.
+            intent = stripe.PaymentIntent.capture(self.stripe_payment_intent_id)
+
+            if intent.status != "succeeded":
+                raise ValueError(
+                    f"Stripe payment did not succeed (status: {intent.status})."
+                )
+
+            ServiceRequest.objects.filter(pk=self.pk).update(
+                stripe_payment_intent_id=intent.id
+            )
+
+        except stripe.error.StripeError as exc:
+            raise ValueError(f"Card payment failed: {exc.user_message}") from exc
+
     @transaction.atomic
     def cancel(self, cancelled_by, reason=""):
-        """Cancel the request. Transitions: any non-terminal → cancelled."""
+        """Cancel the request. any non-terminal → cancelled."""
         if not self.can_cancel():
             raise ValueError(f"Cannot cancel a '{self.get_status_display()}' request.")
-        # Roll back provider job count if they were already involved
         if self.provider_id and self.status in (
             ServiceRequestStatus.ASSIGNED,
+            ServiceRequestStatus.QUOTED,
             ServiceRequestStatus.CONFIRMED,
             ServiceRequestStatus.IN_PROGRESS,
         ):
@@ -296,10 +567,7 @@ class ServiceRequest(models.Model):
 
     @transaction.atomic
     def decline(self, reason=""):
-        """Provider declines the assignment. Transitions: assigned → pending.
-
-        The request goes back to the pool for admin to reassign to another provider.
-        """
+        """Provider declines the assignment. assigned → pending."""
         if not self.can_decline():
             raise ValueError(
                 f"Cannot decline from '{self.get_status_display()}' status."
@@ -325,11 +593,28 @@ class ServiceRequest(models.Model):
         )
 
 
-class Review(models.Model):
-    """
-    One review per completed service request, written by the customer.
-    """
+class ServiceRequestPhoto(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service_request = models.ForeignKey(
+        ServiceRequest,
+        on_delete=models.CASCADE,
+        related_name="photos",
+    )
+    image = models.ImageField(
+        upload_to="service_requests/photos/",
+        validators=[FileExtensionValidator(["jpg", "jpeg", "png"])],
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = "service_request_photos"
+        ordering = ["uploaded_at"]
+
+    def __str__(self):
+        return f"Photo for #{str(self.service_request_id)[:8].upper()}"
+
+
+class Review(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     service_request = models.OneToOneField(
         ServiceRequest,

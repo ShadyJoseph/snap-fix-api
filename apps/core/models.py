@@ -104,7 +104,7 @@ class Office(models.Model):
     )
     working_hours = models.CharField(
         max_length=200,
-        help_text="e.g. 'Sun–Thu 9:00 AM – 5:00 PM'",
+        help_text="e.g. 'Sun-Thu 9:00 AM - 5:00 PM'",
     )
     is_active = models.BooleanField(default=True)
 

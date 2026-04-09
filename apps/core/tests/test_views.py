@@ -6,31 +6,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.core.models import Category, Office, Region
-
-
-def create_category(**kwargs):
-    defaults = {
-        "name": "Plumbing",
-        "slug": "plumbing",
-        "icon": "🔧",
-        "is_active": True,
-        "order": 1,
-    }
-    defaults.update(kwargs)
-    return Category.objects.create(**defaults)
-
-
-def create_region(**kwargs):
-    defaults = {
-        "name": "Cairo",
-        "slug": "cairo",
-        "code": "CAI",
-        "country": "Egypt",
-        "location": Point(31.2357, 30.0444, srid=4326),
-        "is_active": True,
-    }
-    defaults.update(kwargs)
-    return Region.objects.create(**defaults)
+from factories import make_category, make_office, make_region
 
 
 def get_results(response):
@@ -47,27 +23,27 @@ class CategoryListTests(APITestCase):
         Category.objects.all().delete()
 
     def test_returns_active_categories(self):
-        create_category(name="Plumbing", slug="plumbing")
-        create_category(name="Electrical", slug="electrical")
+        make_category(name="Plumbing", slug="plumbing")
+        make_category(name="Electrical", slug="electrical")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(get_results(response)), 2)
 
     def test_excludes_inactive_categories(self):
-        create_category(name="Plumbing", slug="plumbing", is_active=True)
-        create_category(name="Electrical", slug="electrical", is_active=False)
+        make_category(name="Plumbing", slug="plumbing", is_active=True)
+        make_category(name="Electrical", slug="electrical", is_active=False)
         response = self.client.get(self.url)
         self.assertEqual(len(get_results(response)), 1)
         self.assertEqual(get_results(response)[0]["name"], "Plumbing")
 
     def test_response_fields(self):
-        create_category()
+        make_category()
         response = self.client.get(self.url)
         fields = {"id", "name", "slug", "description", "icon", "order", "is_active"}
         self.assertEqual(set(get_results(response)[0].keys()), fields)
 
     def test_icon_is_emoji(self):
-        create_category(icon="🔧")
+        make_category(icon="🔧")
         response = self.client.get(self.url)
         self.assertEqual(get_results(response)[0]["icon"], "🔧")
 
@@ -88,21 +64,21 @@ class RegionListTests(APITestCase):
         Region.objects.all().delete()
 
     def test_returns_active_regions(self):
-        create_region(name="Cairo", slug="cairo", code="CAI")
-        create_region(name="Alexandria", slug="alexandria", code="ALX")
+        make_region(name="Cairo", slug="cairo", code="CAI")
+        make_region(name="Alexandria", slug="alexandria", code="ALX")
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(get_results(response)), 2)
 
     def test_excludes_inactive_regions(self):
-        create_region(name="Cairo", slug="cairo", code="CAI", is_active=True)
-        create_region(name="Alexandria", slug="alexandria", code="ALX", is_active=False)
+        make_region(name="Cairo", slug="cairo", code="CAI", is_active=True)
+        make_region(name="Alexandria", slug="alexandria", code="ALX", is_active=False)
         response = self.client.get(self.url)
         self.assertEqual(len(get_results(response)), 1)
         self.assertEqual(get_results(response)[0]["name"], "Cairo")
 
     def test_response_fields(self):
-        create_region()
+        make_region()
         response = self.client.get(self.url)
         fields = {
             "id",
@@ -117,13 +93,13 @@ class RegionListTests(APITestCase):
         self.assertEqual(set(get_results(response)[0].keys()), fields)
 
     def test_location_returns_lat_lng(self):
-        create_region(location=Point(31.2357, 30.0444, srid=4326))
+        make_region(location=Point(31.2357, 30.0444, srid=4326))
         response = self.client.get(self.url)
         self.assertAlmostEqual(get_results(response)[0]["latitude"], 30.0444, places=3)
         self.assertAlmostEqual(get_results(response)[0]["longitude"], 31.2357, places=3)
 
     def test_region_without_location(self):
-        create_region(location=None)
+        make_region(location=None)
         response = self.client.get(self.url)
         self.assertIsNone(get_results(response)[0]["latitude"])
         self.assertIsNone(get_results(response)[0]["longitude"])
@@ -138,47 +114,34 @@ class RegionListTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
-def create_office(region, **kwargs):
-    defaults = {
-        "name": "Main Office",
-        "address": "5 Tahrir Square, Cairo",
-        "landmark": "Next to the Egyptian Museum",
-        "location": Point(31.2357, 30.0444, srid=4326),
-        "working_hours": "Sun–Thu 9:00 AM – 5:00 PM",
-        "is_active": True,
-    }
-    defaults.update(kwargs)
-    return Office.objects.create(region=region, **defaults)
-
-
 class OfficeListTests(APITestCase):
     url = reverse("core:office-list")
 
     def setUp(self):
         Office.objects.all().delete()
-        self.region = create_region()
+        self.region = make_region()
 
     def test_returns_active_offices(self):
-        create_office(self.region)
+        make_office(self.region)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(get_results(response)), 1)
 
     def test_excludes_inactive_offices(self):
-        create_office(self.region, is_active=True)
-        create_office(self.region, name="Old Office", is_active=False)
+        make_office(self.region, is_active=True)
+        make_office(self.region, name="Old Office", is_active=False)
         response = self.client.get(self.url)
         self.assertEqual(len(get_results(response)), 1)
 
     def test_location_returns_lat_lng(self):
-        create_office(self.region, location=Point(31.2357, 30.0444, srid=4326))
+        make_office(self.region, location=Point(31.2357, 30.0444, srid=4326))
         response = self.client.get(self.url)
         result = get_results(response)[0]
         self.assertAlmostEqual(result["latitude"], 30.0444, places=3)
         self.assertAlmostEqual(result["longitude"], 31.2357, places=3)
 
     def test_response_fields(self):
-        create_office(self.region)
+        make_office(self.region)
         response = self.client.get(self.url)
         expected = {
             "id",
@@ -193,7 +156,7 @@ class OfficeListTests(APITestCase):
         self.assertEqual(set(get_results(response)[0].keys()), expected)
 
     def test_region_is_nested(self):
-        create_office(self.region)
+        make_office(self.region)
         response = self.client.get(self.url)
         self.assertEqual(get_results(response)[0]["region_name"], self.region.name)
 
@@ -205,8 +168,8 @@ class OfficeListTests(APITestCase):
 class OfficeDetailTests(APITestCase):
     def setUp(self):
         Office.objects.all().delete()
-        self.region = create_region()
-        self.office = create_office(self.region)
+        self.region = make_region()
+        self.office = make_office(self.region)
         self.url = reverse("core:office-detail", kwargs={"id": self.office.id})
 
     def test_returns_office(self):
@@ -265,15 +228,15 @@ class NearestOfficeTests(APITestCase):
 
     def setUp(self):
         Office.objects.all().delete()
-        self.region = create_region()
+        self.region = make_region()
         # Cairo office
-        self.cairo = create_office(
+        self.cairo = make_office(
             self.region,
             name="Cairo Office",
             location=Point(31.2357, 30.0444, srid=4326),
         )
         # Alexandria office — farther from Cairo coords
-        self.alex = create_office(
+        self.alex = make_office(
             self.region,
             name="Alex Office",
             location=Point(29.9187, 31.2001, srid=4326),

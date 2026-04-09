@@ -34,7 +34,7 @@ superuser:
 	$(MANAGE) createsuperuser
 
 shell:
-	$(MANAGE) shell
+	$(MANAGE) shell_plus --ipython
 
 bash:
 	$(DC) exec web bash

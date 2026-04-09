@@ -1,6 +1,8 @@
 # SnapFix API
 
-Django REST API backend for the SnapFix application.
+Django REST Framework + GeoDjango backend for the SnapFix home-services platform.
+Handles customer bookings, provider onboarding & matching, FSM-driven service-request
+lifecycle, and multi-method payment settlement (cash / card / wallet).
 
 ## Prerequisites
 
@@ -51,11 +53,12 @@ python -c "from django.core.management.utils import get_random_secret_key; print
 make up
 ```
 
-This will build the containers, run migrations, create the superuser, and start the dev server.
+Builds containers, runs migrations, creates the superuser, and starts the dev server.
 
-The API will be available at `http://localhost:8000/`
+- API: `http://localhost:8000/`
+- Admin panel: `http://localhost:8000/admin/`
 
-Admin panel: `http://localhost:8000/admin/`
+---
 
 ## Development Commands
 
@@ -69,7 +72,7 @@ make logs            # Follow container logs
 make migrate         # Apply migrations
 make makemigrations  # Create new migrations
 make superuser       # Create superuser manually
-make shell           # Open Django shell
+make shell           # Open Django shell (shell_plus + IPython)
 make bash            # Open container bash
 ```
 
@@ -77,117 +80,163 @@ make bash            # Open container bash
 
 ```bash
 make test                                              # Run all tests
-make test-v                                            # Run all tests with verbose output
+make test-v                                            # Verbose output
 
-# Run specific app tests
-make test-app app=apps.customer.tests.test_views
+# Run a specific app's tests
+make test-app app=apps.booking.tests.test_views
 make test-app app=apps.provider.tests.test_views
 make test-app app=apps.core.tests.test_views
-make test-app app=apps.booking.tests.test_views
+make test-app app=apps.customer.tests.test_views
 make test-app app=apps.provider.tests.test_provider_onboarding
 
-# Run specific test class
+# Run a specific test class or method
 make test-class path=apps.customer.tests.test_views.CustomerRegisterTests
-
-# Run specific test method
 make test-class path=apps.customer.tests.test_views.CustomerRegisterTests.test_register_success
 ```
 
-## Linting & Formatting
+## Code Quality
 
 ```bash
-ruff check .          # Check for issues
-ruff check --fix .    # Auto-fix issues
-ruff format .         # Format code
+make lint            # Check for linting issues (ruff)
+make format          # Check formatting (ruff format --check)
+make security        # Static security scan (bandit)
+make fix             # Auto-fix lint + format issues
+make clean           # Run fix and confirm all checks pass
 ```
+
+---
+
+## Local Shell Testing
+
+`factories.py` at the project root provides unified model factories for
+interactive shell sessions. Every factory has safe defaults and accepts `**kwargs`
+to override any field.
+
+```bash
+make shell   # opens shell_plus + IPython inside the container
+```
+
+```python
+from factories import *
+
+# Quick full scaffold — returns a dict of linked objects
+d = scaffold()
+sr = d["service_request"]
+
+# Or build piecemeal
+region   = make_region()
+category = make_category(name="Electrical", slug="electrical")
+customer = make_customer(email="alice@test.com")
+provider = make_provider(active=True, verified=True)
+provider.categories.add(category)
+
+sr = make_service_request(customer, category, region, is_urgent=True)
+
+# Provider onboarding flow
+staff = make_staff()
+p     = make_provider(active=False, verified=False)
+onb   = make_onboarding(region, category, applicant=p)
+onb.move_to_review(staff)
+onb.approve(staff)
+
+# Completed job + review
+sr     = make_completed_request(customer, provider, category, region)
+review = make_review(sr, customer, provider, rating=5, comment="Great!")
+
+# Images (for ImageField testing)
+img = make_image("photo.png")
+```
+
+**Available factories:**
+
+| Function                                                                 | Creates                           |
+| ------------------------------------------------------------------------ | --------------------------------- |
+| `make_image(name)`                                                       | `SimpleUploadedFile` (1×1 PNG)    |
+| `make_region(**kwargs)`                                                  | `Region`                          |
+| `make_category(**kwargs)`                                                | `Category`                        |
+| `make_office(region, **kwargs)`                                          | `Office`                          |
+| `make_customer(**kwargs)`                                                | `Customer` (active)               |
+| `make_provider(active, verified, **kwargs)`                              | `Provider`                        |
+| `make_staff(**kwargs)`                                                   | `Staff`                           |
+| `make_service_request(customer, category, region, **kwargs)`             | `ServiceRequest` (PENDING)        |
+| `make_completed_request(customer, provider, category, region, **kwargs)` | `ServiceRequest` (COMPLETED)      |
+| `make_review(sr, customer, provider, **kwargs)`                          | `Review`                          |
+| `make_onboarding(region, category, applicant, **kwargs)`                 | `ProviderOnboarding`              |
+| `scaffold()`                                                             | All of the above, linked together |
+
+---
 
 ## Project Structure
 
 ```
 snap-fix-api/
 ├── apps/
-│   ├── core/         # Categories & regions
-│   ├── customer/     # Customer auth & profile
-│   ├── provider/     # Provider auth, profile & onboarding
-│   ├── booking/      # Booking management
-│   ├── staff/        # Staff accounts
-│   └── user/         # Base user model
+│   ├── core/             # Categories, regions, offices
+│   ├── customer/         # Customer auth & profile
+│   ├── provider/         # Provider auth, profile & onboarding FSM
+│   ├── booking/          # Service request lifecycle, payments, reviews
+│   ├── staff/            # Staff accounts
+│   └── user/             # Shared base user model
 ├── config/
 │   ├── settings.py
 │   ├── urls.py
 │   └── wsgi.py
+├── local_scripts/        # One-off helper scripts
+├── factories.py          # Unified model factories (tests + shell)
 ├── docker-compose.yml
-├── docker-compose.dev.yml
 ├── Dockerfile
 ├── manage.py
 ├── requirements.txt
 ├── makefile
+├── URLs.md               # Full API reference with request/response shapes
 ├── .env.example
 └── README.md
 ```
 
-## API Endpoints
+---
+
+## API Overview
+
+Full request/response documentation lives in [URLs.md](URLs.md).
+
+### Service-Request State Flow
 
 ```
-BASE URL: http://localhost:8000
+pending → assigned → quoted → confirmed → in_progress → completed
+                  ↘ (accept) ↗                          ↑ terminal
 
-CUSTOMERS
-  POST   /api/v1/customers/register/
-  POST   /api/v1/customers/login/
-  POST   /api/v1/customers/logout/
-  GET    /api/v1/customers/me/
-
-PROVIDERS
-  POST   /api/v1/providers/register/
-  POST   /api/v1/providers/login/
-  POST   /api/v1/providers/logout/
-  GET    /api/v1/providers/me/
-
-CORE
-  GET    /api/v1/core/categories/
-  GET    /api/v1/core/regions/
+CANCELLED is reachable from: pending, assigned, quoted, confirmed, in_progress.
 ```
+
+---
 
 ## Environment Variables Reference
 
-| Variable                  | Description                   | Example                    |
-| ------------------------- | ----------------------------- | -------------------------- |
-| SECRET_KEY                | Django secret key             | Random 50-character string |
-| DEBUG                     | Debug mode                    | True                       |
-| ALLOWED_HOSTS             | Comma-separated allowed hosts | localhost,127.0.0.1        |
-| DB_NAME                   | Database name                 | snapfix_db                 |
-| DB_USER                   | Database username             | postgres                   |
-| DB_PASSWORD               | Database password             | postgres                   |
-| DB_HOST                   | Database host                 | db                         |
-| DB_PORT                   | Database port                 | 5432                       |
-| DJANGO_SUPERUSER_EMAIL    | Admin email                   | admin@example.com          |
-| DJANGO_SUPERUSER_PASSWORD | Admin password                | your_password              |
+| Variable                    | Description           | Example               |
+| --------------------------- | --------------------- | --------------------- |
+| `SECRET_KEY`                | Django secret key     | Random 50-char string |
+| `DEBUG`                     | Debug mode            | `True`                |
+| `ALLOWED_HOSTS`             | Comma-separated hosts | `localhost,127.0.0.1` |
+| `DB_NAME`                   | Database name         | `snapfix_db`          |
+| `DB_USER`                   | Database username     | `postgres`            |
+| `DB_PASSWORD`               | Database password     | `postgres`            |
+| `DB_HOST`                   | Database host         | `db`                  |
+| `DB_PORT`                   | Database port         | `5432`                |
+| `DJANGO_SUPERUSER_EMAIL`    | Admin email           | `admin@example.com`   |
+| `DJANGO_SUPERUSER_PASSWORD` | Admin password        | `your_password`       |
+
+---
 
 ## Contributing
 
-Create a branch for your feature:
-
 ```bash
 git checkout -b feature/<your-feature-name>
-```
 
-Commit your changes:
-
-```bash
-git add .
+git add <files>
 git commit -m "feature/<your-feature-name>: Brief description"
-```
 
-Push and open a Pull Request:
-
-```bash
 git push origin feature/<your-feature-name>
 ```
 
-All commit messages must follow this format:
-
-```
-<branch-name>: <short description>
-
-Example: feature/login-api: Add login endpoint and serializer
-```
+Commit message format: `<branch-name>: <short description>`
+Example: `feature/login-api: Add login endpoint and serializer`
