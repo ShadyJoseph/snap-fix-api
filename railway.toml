@@ -7,8 +7,7 @@ dockerfilePath = "Dockerfile"
 releaseCommand = "python manage.py migrate --noinput && python manage.py create_superuser"
 
 # The main start command. We pipe logs to stdout so you can see them in the dashboard.
-startCommand = "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"
-
+startCommand = "bash -c 'gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug'"
 # Railway health check settings
 healthcheckPath = "/"
 healthcheckTimeout = 60
