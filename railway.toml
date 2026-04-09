@@ -3,9 +3,22 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-releaseCommand = "sh -c \"until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser\""
-startCommand = "sh -c 'gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120'"
+# Run migrations + safe superuser creation
+releaseCommand = "python manage.py migrate --noinput && python manage.py create_superuser"
+
+# Start the app
+startCommand = "gunicorn config.wsgi:application \
+  --bind 0.0.0.0:$PORT \
+  --workers 2 \
+  --timeout 120 \
+  --access-logfile - \
+  --error-logfile - \
+  --log-level debug"
+
+# Health check
 healthcheckPath = "/"
 healthcheckTimeout = 60
+
+# Restart policy
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
