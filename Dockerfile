@@ -28,6 +28,14 @@ RUN SECRET_KEY=build-phase-dummy-key DEBUG=False python manage.py collectstatic 
 # Expose the default port (Railway overrides this with $PORT)
 EXPOSE 8080
 
-# Default CMD (used if railway.toml startCommand is not present)
-# Use shell form so $PORT is expanded at runtime
-CMD bash -c 'gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug'
+CMD bash -c "\
+    echo '=== PORT = ${PORT:-8080} ==='; \
+    rm -f gunicorn.conf.py 2>/dev/null || true; \
+    exec gunicorn config.wsgi:application \
+    --bind 0.0.0.0:${PORT:-8080} \
+    --workers 2 \
+    --timeout 120 \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level debug \
+    --no-config"
