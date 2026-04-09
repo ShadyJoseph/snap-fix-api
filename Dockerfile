@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies (Postgres + GIS)
+# System dependencies for Postgres + PostGIS
 RUN apt-get update && apt-get install -y \
     libpq-dev gcc \
     binutils libproj-dev gdal-bin \
@@ -18,5 +18,8 @@ COPY . .
 # Collect static files
 RUN SECRET_KEY=dummy DEBUG=False python manage.py collectstatic --noinput
 
-# Do NOT run migrations or superuser here
+# Expose default port (Railway will override with $PORT)
+EXPOSE 8000
+
+# Don't run migrations or superuser here; handled in Railway releaseCommand
 CMD ["gunicorn", "config.wsgi:application"]
