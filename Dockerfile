@@ -1,25 +1,32 @@
 FROM python:3.12-slim
 
+# Prevent Python from writing .pyc files and keep logs snappy
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# System dependencies for Postgres + PostGIS
+# Install system dependencies for Postgres and PostGIS
 RUN apt-get update && apt-get install -y \
-    libpq-dev gcc \
-    binutils libproj-dev gdal-bin \
+    libpq-dev \
+    gcc \
+    binutils \
+    libproj-dev \
+    gdal-bin \
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project
+# Copy the rest of the code
 COPY . .
 
-# Collect static files
-RUN SECRET_KEY=dummy DEBUG=False python manage.py collectstatic --noinput
+# Collect static files (Uses a dummy key for the build phase)
+RUN SECRET_KEY=build-phase-dummy-key DEBUG=False python manage.py collectstatic --noinput
 
-# Expose default port (Railway will override with $PORT)
-EXPOSE 8000
+# Expose the default port (Railway overrides this with $PORT)
+EXPOSE 8080
 
-# Don't run migrations or superuser here; handled in Railway releaseCommand
-CMD ["sh", "-c", "until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 120"]
+# Default CMD (used if railway.toml startCommand is not present)
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8080"]

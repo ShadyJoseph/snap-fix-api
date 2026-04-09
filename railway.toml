@@ -3,13 +3,13 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Safe migrations + superuser creation
+# This runs once per deployment. If this fails, the new version won't go live.
 releaseCommand = "python manage.py migrate --noinput && python manage.py create_superuser"
 
-# Start app, expand $PORT properly
-startCommand = "sh -c \"gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug\""
+# The main start command. We pipe logs to stdout so you can see them in the dashboard.
+startCommand = "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"
 
-# Health check
+# Railway health check settings
 healthcheckPath = "/"
 healthcheckTimeout = 60
 
