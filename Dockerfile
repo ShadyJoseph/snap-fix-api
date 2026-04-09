@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies for Postgres and PostGIS
+# Install system dependencies for Postgres + PostGIS
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
@@ -22,10 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the code
 COPY . .
 
-# Collect static files (Uses a dummy key for the build phase)
+# Collect static files (build phase)
 RUN SECRET_KEY=build-phase-dummy-key DEBUG=False python manage.py collectstatic --noinput
 
-# Expose the default port (Railway overrides this with $PORT)
+# Expose port (Railway will override this with $PORT)
 EXPOSE 8080
 
-CMD ["sh", "-c", "echo \"=== PORT = ${PORT} ===\"; rm -f gunicorn.conf.py 2>/dev/null || true; exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug --config /dev/null"]
+CMD ["sh", "-c", "echo \"=== PORT = ${PORT} ===\"; gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"]
