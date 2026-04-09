@@ -28,14 +28,9 @@ RUN SECRET_KEY=build-phase-dummy-key DEBUG=False python manage.py collectstatic 
 # Expose the default port (Railway overrides this with $PORT)
 EXPOSE 8080
 
-CMD bash -c "\
-    echo '=== PORT = ${PORT:-8080} ==='; \
+# Use shell form + --no-config to ignore any hidden gunicorn.conf.py
+CMD bash -c '\
+    echo "=== PORT = ${PORT} ==="; \
     rm -f gunicorn.conf.py 2>/dev/null || true; \
-    exec gunicorn config.wsgi:application \
-    --bind 0.0.0.0:${PORT:-8080} \
-    --workers 2 \
-    --timeout 120 \
-    --access-logfile - \
-    --error-logfile - \
-    --log-level debug \
-    --no-config"
+    exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug --no-config\
+    '

@@ -3,29 +3,12 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Runs once before the app starts (migrations + superuser)
 releaseCommand = "python manage.py migrate --noinput && python manage.py create_superuser"
 
-# Fixed start command - forces correct $PORT and removes any hidden gunicorn config
-startCommand = "bash -c '
-  echo \"=== RAILWAY PORT = ${PORT} ===\";
-  rm -f gunicorn.conf.py 2>/dev/null || true;
-  echo \"=== gunicorn.conf.py removed if existed ===\";
-  ls -la | grep -E \"gunicorn|conf\" || echo \"No gunicorn config found\";
-  exec gunicorn config.wsgi:application \
-    --bind 0.0.0.0:${PORT:-8080} \
-    --workers 2 \
-    --timeout 120 \
-    --access-logfile - \
-    --error-logfile - \
-    --log-level debug \
-    --no-config
-'"
+startCommand = "bash -c 'echo \"=== RAILWAY PORT = ${PORT} ===\"; rm -f gunicorn.conf.py 2>/dev/null || true; echo \"=== gunicorn.conf.py removed if existed ===\"; ls -la | grep -E \"gunicorn|conf\" || echo \"No gunicorn config found\"; exec gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug --no-config'"
 
-# Railway health check settings
 healthcheckPath = "/"
 healthcheckTimeout = 60
 
-# Restart policy
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
