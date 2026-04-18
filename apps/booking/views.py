@@ -291,6 +291,7 @@ class InitiateCardPaymentView(APIView):
         serializer = InitiateCardPaymentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         stripe_pm_id = serializer.validated_data["stripe_payment_method_id"]
+        return_url = serializer.validated_data["return_url"]
 
         stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -303,6 +304,7 @@ class InitiateCardPaymentView(APIView):
                 payment_method=stripe_pm_id,
                 capture_method="manual",
                 confirm=True,
+                return_url=return_url,
                 metadata={"service_request_id": str(sr.id)},
             )
         except stripe.error.StripeError as exc:

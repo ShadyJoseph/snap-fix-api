@@ -1844,6 +1844,8 @@ class InitiateCardPaymentTests(BookingTestCase):
     def _url(self, sr):
         return reverse("bookings:request-initiate-card-payment", args=[sr.id])
 
+    RETURN_URL = "snapfix://payment/complete"
+
     def _confirmed_card_sr(self, final_price="100.00", wallet_amount="0.00"):
         """SR in CONFIRMED status with CARD payment method."""
         sr = self.make_request()
@@ -1855,6 +1857,9 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr.save()
         return sr
 
+    def _payload(self, **kwargs):
+        return {"stripe_payment_method_id": "pm_test", "return_url": self.RETURN_URL, **kwargs}
+
     def test_happy_path_creates_intent_stores_id_returns_secret(self):
         """Creates PaymentIntent, stores stripe_payment_intent_id, returns client_secret."""
         stripe_mod, _ = make_stripe_mock(
@@ -1865,9 +1870,7 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr = self._confirmed_card_sr(final_price="100.00")
 
         with patch.dict(sys.modules, {"stripe": stripe_mod}):
-            response = self.client.post(
-                self._url(sr), {"stripe_payment_method_id": "pm_test"}
-            )
+            response = self.client.post(self._url(sr), self._payload())
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["stripe_client_secret"], "pi_abc123_secret")
@@ -1878,6 +1881,7 @@ class InitiateCardPaymentTests(BookingTestCase):
         self.assertEqual(create_call.kwargs["amount"], 10000)  # 100.00 * 100
         self.assertEqual(create_call.kwargs["capture_method"], "manual")
         self.assertEqual(create_call.kwargs["confirm"], True)
+        self.assertEqual(create_call.kwargs["return_url"], self.RETURN_URL)
 
     def test_partial_wallet_card_amount_sent_to_stripe(self):
         """Stripe is charged only the card_amount (final_price - wallet_amount)."""
@@ -1886,9 +1890,7 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr = self._confirmed_card_sr(final_price="100.00", wallet_amount="40.00")
 
         with patch.dict(sys.modules, {"stripe": stripe_mod}):
-            response = self.client.post(
-                self._url(sr), {"stripe_payment_method_id": "pm_test"}
-            )
+            response = self.client.post(self._url(sr), self._payload())
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         create_call = stripe_mod.PaymentIntent.create.call_args
@@ -1900,18 +1902,14 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr = self._confirmed_card_sr()
         sr.payment_method = PaymentMethod.CASH
         sr.save()
-        response = self.client.post(
-            self._url(sr), {"stripe_payment_method_id": "pm_test"}
-        )
+        response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_wallet_covers_full_price_returns_400(self):
         """wallet_amount == final_price → card_amount == 0 → 400."""
         self.authenticate_customer()
         sr = self._confirmed_card_sr(final_price="100.00", wallet_amount="100.00")
-        response = self.client.post(
-            self._url(sr), {"stripe_payment_method_id": "pm_test"}
-        )
+        response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_wrong_status_pending_returns_404(self):
@@ -1921,9 +1919,7 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr.payment_method = PaymentMethod.CARD
         sr.final_price = "100.00"
         sr.save()  # PENDING
-        response = self.client.post(
-            self._url(sr), {"stripe_payment_method_id": "pm_test"}
-        )
+        response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_in_progress_status_accepted(self):
@@ -1935,9 +1931,7 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr.save()
 
         with patch.dict(sys.modules, {"stripe": stripe_mod}):
-            response = self.client.post(
-                self._url(sr), {"stripe_payment_method_id": "pm_test"}
-            )
+            response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_stripe_error_returns_400_with_message(self):
@@ -1950,9 +1944,7 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr = self._confirmed_card_sr()
 
         with patch.dict(sys.modules, {"stripe": stripe_mod}):
-            response = self.client.post(
-                self._url(sr), {"stripe_payment_method_id": "pm_test"}
-            )
+            response = self.client.post(self._url(sr), self._payload())
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Stripe error", str(response.data))
@@ -1964,7 +1956,21 @@ class InitiateCardPaymentTests(BookingTestCase):
         sr = self._confirmed_card_sr()
 
         with patch.dict(sys.modules, {"stripe": stripe_mod}):
-            response = self.client.post(self._url(sr), {})  # no PM ID
+            response = self.client.post(self._url(sr), {"return_url": self.RETURN_URL})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        stripe_mod.PaymentIntent.create.assert_not_called()
+
+    def test_missing_return_url_returns_400(self):
+        """Serializer requires return_url → 400 when omitted; Stripe never called."""
+        stripe_mod, _ = make_stripe_mock()
+        self.authenticate_customer()
+        sr = self._confirmed_card_sr()
+
+        with patch.dict(sys.modules, {"stripe": stripe_mod}):
+            response = self.client.post(
+                self._url(sr), {"stripe_payment_method_id": "pm_test"}
+            )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         stripe_mod.PaymentIntent.create.assert_not_called()
@@ -1974,24 +1980,18 @@ class InitiateCardPaymentTests(BookingTestCase):
         other = make_customer(email="other@test.com")
         sr = self._confirmed_card_sr()
         self.client.force_authenticate(user=other)
-        response = self.client.post(
-            self._url(sr), {"stripe_payment_method_id": "pm_test"}
-        )
+        response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_provider_cannot_initiate_returns_403(self):
         sr = self._confirmed_card_sr()
         self.authenticate_provider()
-        response = self.client.post(
-            self._url(sr), {"stripe_payment_method_id": "pm_test"}
-        )
+        response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_unauthenticated_returns_401(self):
         sr = self._confirmed_card_sr()
-        response = self.client.post(
-            self._url(sr), {"stripe_payment_method_id": "pm_test"}
-        )
+        response = self.client.post(self._url(sr), self._payload())
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 

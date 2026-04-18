@@ -330,6 +330,10 @@ class InitiateCardPaymentSerializer(serializers.Serializer):
         max_length=255,
         help_text="Stripe PaymentMethod ID (pm_xxx) from the client SDK.",
     )
+    return_url = serializers.CharField(
+        max_length=2048,
+        help_text="Deep link or URL to redirect the customer after payment (required by Stripe). Supports custom schemes (e.g. snapfix://payment/complete).",
+    )
 
 
 # ── History detail serializers (role-aware) ───────────────────────────────────
