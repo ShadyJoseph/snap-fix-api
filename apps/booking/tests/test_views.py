@@ -14,6 +14,8 @@ from apps.booking.choices import (
     ServiceRequestStatus,
 )
 from apps.booking.models import ServiceRequest
+from apps.notifications.choices import NotificationType
+from apps.notifications.models import Notification
 from factories import (
     make_category,
     make_completed_request,
@@ -24,6 +26,8 @@ from factories import (
     make_review,
     make_service_request,
 )
+
+TASK_PATH = "apps.notifications.tasks.send_push_notification.delay"
 
 # ── Base ──────────────────────────────────────────────────────────────────────
 
@@ -313,6 +317,21 @@ class CustomerCancelTests(BookingTestCase):
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CANCELLED)
 
+    @patch(TASK_PATH)
+    def test_cancel_assigned_request_notifies_provider(self, mock_push):
+        self.authenticate_customer()
+        sr = self.assign_to_provider(self.make_request())
+        response = self.client.post(self._cancel_url(sr), {"reason": "Changed mind"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, ServiceRequestStatus.CANCELLED)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.provider, type=NotificationType.CANCELLED_BY_CUSTOMER
+            ).exists()
+        )
+        mock_push.assert_called_once()
+
     def test_cannot_cancel_completed_request(self):
         self.authenticate_customer()
         sr = self.make_request()
@@ -388,7 +407,8 @@ class ProviderAcceptTests(BookingTestCase):
     def _accept_url(self, sr):
         return reverse("bookings:request-accept", args=[sr.id])
 
-    def test_accept_assigned_request_transitions_to_confirmed(self):
+    @patch(TASK_PATH)
+    def test_accept_assigned_request_transitions_to_confirmed(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
         response = self.client.post(self._accept_url(sr))
@@ -396,6 +416,12 @@ class ProviderAcceptTests(BookingTestCase):
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
         self.assertIsNotNone(sr.confirmed_at)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.REQUEST_ACCEPTED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_cannot_accept_pending_request(self):
         self.authenticate_provider()
@@ -445,7 +471,8 @@ class ProviderDeclineTests(BookingTestCase):
     def _decline_url(self, sr):
         return reverse("bookings:request-decline", args=[sr.id])
 
-    def test_decline_returns_request_to_pending_and_clears_provider(self):
+    @patch(TASK_PATH)
+    def test_decline_returns_request_to_pending_and_clears_provider(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
         response = self.client.post(self._decline_url(sr), {"reason": "Not available"})
@@ -456,6 +483,12 @@ class ProviderDeclineTests(BookingTestCase):
         self.assertIsNone(sr.assigned_at)
         self.assertEqual(sr.decline_reason, "Not available")
         self.assertIsNotNone(sr.declined_at)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.REQUEST_DECLINED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_decline_without_reason_is_allowed(self):
         self.authenticate_provider()
@@ -487,7 +520,8 @@ class ProviderStartTests(BookingTestCase):
     def _start_url(self, sr):
         return reverse("bookings:request-start", args=[sr.id])
 
-    def test_start_confirmed_request_transitions_to_in_progress(self):
+    @patch(TASK_PATH)
+    def test_start_confirmed_request_transitions_to_in_progress(self, mock_push):
         self.authenticate_provider()
         sr = self.make_request()
         self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
@@ -496,6 +530,12 @@ class ProviderStartTests(BookingTestCase):
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
         self.assertIsNotNone(sr.started_at)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.JOB_STARTED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_cannot_start_assigned_request(self):
         self.authenticate_provider()
@@ -524,7 +564,8 @@ class ProviderCompleteTests(BookingTestCase):
         self.set_status(sr, ServiceRequestStatus.IN_PROGRESS, provider=self.provider)
         return sr
 
-    def test_complete_transitions_to_completed_and_marks_paid(self):
+    @patch(TASK_PATH)
+    def test_complete_transitions_to_completed_and_marks_paid(self, mock_push):
         """Cash job (default): completes successfully, payment_status=paid immediately."""
         self.authenticate_provider()
         sr = self._in_progress_request()
@@ -534,6 +575,17 @@ class ProviderCompleteTests(BookingTestCase):
         self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
         self.assertEqual(sr.payment_status, PaymentStatus.PAID)
         self.assertIsNotNone(sr.completed_at)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.JOB_COMPLETED
+            ).exists()
+        )
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.provider, type=NotificationType.PAYMENT_SETTLED
+            ).exists()
+        )
+        self.assertEqual(mock_push.call_count, 2)
 
     def test_complete_without_final_price_is_allowed(self):
         """No final_price set (no quote step done): completes with amount=0, still PAID."""
@@ -566,7 +618,8 @@ class ProviderCancelTests(BookingTestCase):
     def _cancel_url(self, sr):
         return reverse("bookings:request-provider-cancel", args=[sr.id])
 
-    def test_cancel_assigned_request(self):
+    @patch(TASK_PATH)
+    def test_cancel_assigned_request(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
         response = self.client.post(self._cancel_url(sr), {"reason": "Emergency"})
@@ -575,6 +628,12 @@ class ProviderCancelTests(BookingTestCase):
         self.assertEqual(sr.status, ServiceRequestStatus.CANCELLED)
         self.assertEqual(sr.cancelled_by, CancelledBy.PROVIDER)
         self.assertEqual(sr.cancellation_reason, "Emergency")
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.CANCELLED_BY_PROVIDER
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_cancel_in_progress_request(self):
         self.authenticate_provider()
@@ -652,7 +711,8 @@ class ProviderPickRequestTests(BookingTestCase):
     def _pick_url(self, sr):
         return reverse("bookings:request-pick", args=[sr.id])
 
-    def test_pick_pending_request_transitions_to_assigned(self):
+    @patch(TASK_PATH)
+    def test_pick_pending_request_transitions_to_assigned(self, mock_push):
         self.authenticate_provider()
         sr = self.make_request()
         response = self.client.post(self._pick_url(sr))
@@ -661,6 +721,12 @@ class ProviderPickRequestTests(BookingTestCase):
         self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
         self.assertEqual(sr.provider, self.provider)
         self.assertIsNotNone(sr.assigned_at)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.REQUEST_ASSIGNED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_pick_increments_provider_total_jobs(self):
         self.authenticate_provider()
@@ -1623,7 +1689,8 @@ class ProviderQuoteViewTests(BookingTestCase):
     def _quote_url(self, sr):
         return reverse("bookings:request-quote", args=[sr.id])
 
-    def test_quote_assigned_request_transitions_to_quoted(self):
+    @patch(TASK_PATH)
+    def test_quote_assigned_request_transitions_to_quoted(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
         response = self.client.post(self._quote_url(sr), {"price": "150.00"})
@@ -1633,6 +1700,12 @@ class ProviderQuoteViewTests(BookingTestCase):
         self.assertEqual(str(sr.quoted_price), "150.00")
         self.assertEqual(response.data["status"], ServiceRequestStatus.QUOTED)
         self.assertEqual(str(response.data["quoted_price"]), "150.00")
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.customer, type=NotificationType.QUOTE_RECEIVED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_quote_wrong_provider_returns_404(self):
         """Provider cannot quote another provider's request."""
@@ -1699,7 +1772,8 @@ class CustomerQuoteApprovalTests(BookingTestCase):
         sr.save()
         return sr
 
-    def test_approve_quote_confirms_and_locks_price(self):
+    @patch(TASK_PATH)
+    def test_approve_quote_confirms_and_locks_price(self, mock_push):
         self.authenticate_customer()
         sr = self._quoted_request(quoted_price="150.00")
         response = self.client.post(self._approve_url(sr))
@@ -1708,9 +1782,15 @@ class CustomerQuoteApprovalTests(BookingTestCase):
         self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
         self.assertIsNotNone(sr.confirmed_at)
         self.assertEqual(str(sr.final_price), "150.00")
-        self.assertEqual(str(sr.final_price), "150.00")
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.provider, type=NotificationType.QUOTE_APPROVED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
-    def test_reject_quote_returns_to_pending_and_decrements_jobs(self):
+    @patch(TASK_PATH)
+    def test_reject_quote_returns_to_pending_and_decrements_jobs(self, mock_push):
         self.authenticate_customer()
         self.provider.total_jobs = 1
         self.provider.save()
@@ -1724,6 +1804,12 @@ class CustomerQuoteApprovalTests(BookingTestCase):
         self.assertIsNone(sr.assigned_at)
         self.provider.refresh_from_db()
         self.assertEqual(self.provider.total_jobs, 0)
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.provider, type=NotificationType.QUOTE_REJECTED
+            ).exists()
+        )
+        mock_push.assert_called_once()
 
     def test_rejected_request_reappears_in_open_pool(self):
         """After rejection, the request returns to the pool for another provider."""
@@ -1858,7 +1944,11 @@ class InitiateCardPaymentTests(BookingTestCase):
         return sr
 
     def _payload(self, **kwargs):
-        return {"stripe_payment_method_id": "pm_test", "return_url": self.RETURN_URL, **kwargs}
+        return {
+            "stripe_payment_method_id": "pm_test",
+            "return_url": self.RETURN_URL,
+            **kwargs,
+        }
 
     def test_happy_path_creates_intent_stores_id_returns_secret(self):
         """Creates PaymentIntent, stores stripe_payment_intent_id, returns client_secret."""
@@ -2269,3 +2359,211 @@ class ProviderCompletePaymentTests(BookingTestCase):
         self.assertEqual(str(self.customer.wallet_balance), "100.00")
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
+
+
+# ── Notification content assertions ───────────────────────────────────────────
+
+
+class NotificationContentTest(BookingTestCase):
+    """
+    Asserts the title, body, and data payload of every FSM-triggered notification.
+    Complements the type/recipient checks in individual view tests.
+    """
+
+    def _get_notification(self, recipient, notification_type):
+        return Notification.objects.get(recipient=recipient, type=notification_type)
+
+    # ── Provider picks request (pending → assigned) ────────────
+
+    @patch(TASK_PATH)
+    def test_request_assigned_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.make_request(title="Leaking Pipe")
+        self.client.post(reverse("bookings:request-pick", args=[sr.id]))
+        sr.refresh_from_db()
+
+        notif = self._get_notification(self.customer, NotificationType.REQUEST_ASSIGNED)
+        self.assertEqual(notif.title, "Provider Assigned")
+        self.assertIn(sr.provider.get_full_name(), notif.body)
+        self.assertIn("Leaking Pipe", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Provider submits quote (assigned → quoted) ─────────────
+
+    @patch(TASK_PATH)
+    def test_quote_received_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request(title="AC Repair"))
+        self.client.post(
+            reverse("bookings:request-quote", args=[sr.id]), {"price": "250.00"}
+        )
+        sr.refresh_from_db()
+
+        notif = self._get_notification(self.customer, NotificationType.QUOTE_RECEIVED)
+        self.assertEqual(notif.title, "New Quote")
+        self.assertIn("250", notif.body)
+        self.assertIn("AC Repair", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Provider accepts directly (assigned → confirmed) ───────
+
+    @patch(TASK_PATH)
+    def test_request_accepted_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request(title="Painting"))
+        self.client.post(reverse("bookings:request-accept", args=[sr.id]))
+        sr.refresh_from_db()
+
+        notif = self._get_notification(self.customer, NotificationType.REQUEST_ACCEPTED)
+        self.assertEqual(notif.title, "Request Accepted")
+        self.assertIn(self.provider.get_full_name(), notif.body)
+        self.assertIn("Painting", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Customer approves quote (quoted → confirmed) ───────────
+
+    @patch(TASK_PATH)
+    def test_quote_approved_notification_content(self, _mock_push):
+        self.authenticate_customer()
+        sr = self.make_request(title="Plumbing")
+        sr.status = ServiceRequestStatus.QUOTED
+        sr.provider = self.provider
+        sr.quoted_price = "180.00"
+        sr.save()
+        self.client.post(reverse("bookings:request-approve-quote", args=[sr.id]))
+        sr.refresh_from_db()
+
+        notif = self._get_notification(self.provider, NotificationType.QUOTE_APPROVED)
+        self.assertEqual(notif.title, "Quote Approved")
+        self.assertIn(self.customer.get_full_name(), notif.body)
+        self.assertIn("180", notif.body)
+        self.assertIn("Plumbing", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Customer rejects quote (quoted → pending) ──────────────
+
+    @patch(TASK_PATH)
+    def test_quote_rejected_notification_content(self, _mock_push):
+        self.authenticate_customer()
+        sr = self.make_request(title="Tiling")
+        sr.status = ServiceRequestStatus.QUOTED
+        sr.provider = self.provider
+        sr.quoted_price = "300.00"
+        self.provider.total_jobs = 1
+        self.provider.save()
+        sr.save()
+        self.client.post(reverse("bookings:request-reject-quote", args=[sr.id]))
+
+        notif = self._get_notification(self.provider, NotificationType.QUOTE_REJECTED)
+        self.assertEqual(notif.title, "Quote Rejected")
+        self.assertIn(self.customer.get_full_name(), notif.body)
+        self.assertIn("Tiling", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Provider declines assignment (assigned → pending) ──────
+
+    @patch(TASK_PATH)
+    def test_request_declined_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request(title="Carpentry"))
+        self.client.post(
+            reverse("bookings:request-decline", args=[sr.id]), {"reason": "Busy"}
+        )
+
+        notif = self._get_notification(self.customer, NotificationType.REQUEST_DECLINED)
+        self.assertEqual(notif.title, "Provider Declined")
+        self.assertIn("Carpentry", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Provider starts job (confirmed → in_progress) ──────────
+
+    @patch(TASK_PATH)
+    def test_job_started_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.make_request(title="Electrical Fix")
+        self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
+        self.client.post(reverse("bookings:request-start", args=[sr.id]))
+        sr.refresh_from_db()
+
+        notif = self._get_notification(self.customer, NotificationType.JOB_STARTED)
+        self.assertEqual(notif.title, "Job Started")
+        self.assertIn(self.provider.get_full_name(), notif.body)
+        self.assertIn("Electrical Fix", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Provider completes job (in_progress → completed) ───────
+
+    @patch(TASK_PATH)
+    def test_job_completed_and_payment_settled_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.make_request(title="Tiling Fix")
+        self.set_status(sr, ServiceRequestStatus.IN_PROGRESS, provider=self.provider)
+        self.client.post(reverse("bookings:request-complete", args=[sr.id]))
+        sr.refresh_from_db()
+
+        customer_notif = self._get_notification(
+            self.customer, NotificationType.JOB_COMPLETED
+        )
+        self.assertEqual(customer_notif.title, "Job Completed")
+        self.assertIn("Tiling Fix", customer_notif.body)
+        self.assertEqual(customer_notif.data["service_request_id"], str(sr.id))
+
+        provider_notif = self._get_notification(
+            self.provider, NotificationType.PAYMENT_SETTLED
+        )
+        self.assertEqual(provider_notif.title, "Payment Settled")
+        self.assertEqual(provider_notif.data["service_request_id"], str(sr.id))
+
+    # ── Customer cancels with provider (any → cancelled) ───────
+
+    @patch(TASK_PATH)
+    def test_cancelled_by_customer_notification_content(self, _mock_push):
+        self.authenticate_customer()
+        sr = self.assign_to_provider(self.make_request(title="Window Fix"))
+        self.client.post(
+            reverse("bookings:request-cancel", args=[sr.id]),
+            {"reason": "No longer needed"},
+        )
+
+        notif = self._get_notification(
+            self.provider, NotificationType.CANCELLED_BY_CUSTOMER
+        )
+        self.assertEqual(notif.title, "Request Cancelled")
+        self.assertIn(self.customer.get_full_name(), notif.body)
+        self.assertIn("Window Fix", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── Provider cancels job (any → cancelled) ─────────────────
+
+    @patch(TASK_PATH)
+    def test_cancelled_by_provider_notification_content(self, _mock_push):
+        self.authenticate_provider()
+        sr = self.assign_to_provider(self.make_request(title="Roof Fix"))
+        self.client.post(
+            reverse("bookings:request-provider-cancel", args=[sr.id]),
+            {"reason": "Emergency"},
+        )
+
+        notif = self._get_notification(
+            self.customer, NotificationType.CANCELLED_BY_PROVIDER
+        )
+        self.assertEqual(notif.title, "Request Cancelled")
+        self.assertIn("Roof Fix", notif.body)
+        self.assertEqual(notif.data["service_request_id"], str(sr.id))
+
+    # ── No push task fired when no provider on cancel ──────────
+
+    @patch(TASK_PATH)
+    def test_cancelling_pending_request_with_no_provider_sends_no_notification(
+        self, mock_push
+    ):
+        self.authenticate_customer()
+        sr = self.make_request()  # status=pending, provider=None
+        self.client.post(reverse("bookings:request-cancel", args=[sr.id]), {})
+
+        mock_push.assert_not_called()
+        self.assertFalse(
+            Notification.objects.filter(
+                type=NotificationType.CANCELLED_BY_CUSTOMER
+            ).exists()
+        )

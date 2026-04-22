@@ -25,6 +25,11 @@ COPY . .
 # Collect static files
 RUN SECRET_KEY=build-phase-dummy-key DEBUG=False python manage.py collectstatic --noinput
 
+# Run as a non-root user
+RUN useradd --no-create-home --shell /bin/false appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8080
 
 CMD ["sh", "-c", "echo \"=== PORT = ${PORT} ===\"; gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"]

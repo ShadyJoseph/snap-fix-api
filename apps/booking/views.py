@@ -8,6 +8,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.notifications import service as notifications
+
 from .choices import CancelledBy, PaymentMethod, ServiceRequestStatus
 from .models import Review, ServiceRequest, ServiceRequestPhoto
 from .serializers import (
@@ -59,7 +61,7 @@ def get_provider_or_403(user):
 
 def _sr_queryset_base():
     return ServiceRequest.objects.select_related(
-        "category", "region", "provider", "review"
+        "category", "region", "customer", "provider", "review"
     ).prefetch_related("photos")
 
 
@@ -155,17 +157,24 @@ class CustomerCancelView(APIView):
         sr = get_request_or_404(
             pk,
             ServiceRequest.objects.filter(customer=customer)
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
         serializer = ServiceRequestCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        fsm_transition(
-            lambda: sr.cancel(
-                cancelled_by=CancelledBy.CUSTOMER,
-                reason=serializer.validated_data.get("reason", ""),
+        provider_snapshot = sr.provider if sr.provider_id else None
+        with transaction.atomic():
+            fsm_transition(
+                lambda: sr.cancel(
+                    cancelled_by=CancelledBy.CUSTOMER,
+                    reason=serializer.validated_data.get("reason", ""),
+                )
             )
-        )
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            if provider_snapshot:
+                notifications.notify_provider_cancelled_by_customer(
+                    sr, provider_snapshot
+                )
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -197,7 +206,7 @@ class CustomerApproveQuoteView(APIView):
             ServiceRequest.objects.filter(
                 customer=customer, status=ServiceRequestStatus.QUOTED
             )
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
 
@@ -222,8 +231,10 @@ class CustomerApproveQuoteView(APIView):
         )
         sr.refresh_from_db()
 
-        fsm_transition(sr.approve_quote)
-        sr.refresh_from_db()
+        with transaction.atomic():
+            fsm_transition(sr.approve_quote)
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_provider_quote_approved(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -237,11 +248,16 @@ class CustomerRejectQuoteView(APIView):
             ServiceRequest.objects.filter(
                 customer=customer, status=ServiceRequestStatus.QUOTED
             )
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
-        fsm_transition(sr.reject_quote)
-        sr.refresh_from_db()
+        # Capture provider before reject_quote() clears sr.provider.
+        provider_snapshot = sr.provider
+        with transaction.atomic():
+            fsm_transition(sr.reject_quote)
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            if provider_snapshot:
+                notifications.notify_provider_quote_rejected(sr, provider_snapshot)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -355,13 +371,15 @@ class ProviderQuoteView(APIView):
             ServiceRequest.objects.filter(
                 provider=provider, status=ServiceRequestStatus.ASSIGNED
             )
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
         serializer = ProviderQuoteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        fsm_transition(lambda: sr.quote(serializer.validated_data["price"]))
-        sr.refresh_from_db()
+        with transaction.atomic():
+            fsm_transition(lambda: sr.quote(serializer.validated_data["price"]))
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_quote_received(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -377,10 +395,13 @@ class ProviderAcceptView(APIView):
             ServiceRequest.objects.filter(
                 provider=provider, status=ServiceRequestStatus.ASSIGNED
             )
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
-        fsm_transition(sr.confirm)
+        with transaction.atomic():
+            fsm_transition(sr.confirm)
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_request_accepted(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -392,14 +413,17 @@ class ProviderDeclineView(APIView):
         sr = get_request_or_404(
             pk,
             ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
         serializer = ServiceRequestDeclineSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        fsm_transition(
-            lambda: sr.decline(reason=serializer.validated_data.get("reason", ""))
-        )
+        with transaction.atomic():
+            fsm_transition(
+                lambda: sr.decline(reason=serializer.validated_data.get("reason", ""))
+            )
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_request_declined(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -411,10 +435,13 @@ class ProviderStartView(APIView):
         sr = get_request_or_404(
             pk,
             ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
-        fsm_transition(sr.start)
+        with transaction.atomic():
+            fsm_transition(sr.start)
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_job_started(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -433,11 +460,14 @@ class ProviderCompleteView(APIView):
         sr = get_request_or_404(
             pk,
             ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "provider", "customer", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
-        fsm_transition(sr.complete)
-        sr = _sr_queryset_base().get(pk=sr.pk)
+        with transaction.atomic():
+            fsm_transition(sr.complete)
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_job_completed(sr)
+            notifications.notify_provider_payment_settled(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -449,17 +479,20 @@ class ProviderCancelView(APIView):
         sr = get_request_or_404(
             pk,
             ServiceRequest.objects.filter(provider=provider)
-            .select_related("category", "region", "provider", "review")
+            .select_related("category", "region", "customer", "provider", "review")
             .prefetch_related("photos"),
         )
         serializer = ServiceRequestCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        fsm_transition(
-            lambda: sr.cancel(
-                cancelled_by=CancelledBy.PROVIDER,
-                reason=serializer.validated_data.get("reason", ""),
+        with transaction.atomic():
+            fsm_transition(
+                lambda: sr.cancel(
+                    cancelled_by=CancelledBy.PROVIDER,
+                    reason=serializer.validated_data.get("reason", ""),
+                )
             )
-        )
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_cancelled_by_provider(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 
@@ -475,8 +508,10 @@ class ProviderPickRequestView(APIView):
                 category__in=provider.categories.all(),
             ),
         )
-        fsm_transition(lambda: sr.self_assign(provider))
-        sr = _sr_queryset_base().get(pk=sr.pk)
+        with transaction.atomic():
+            fsm_transition(lambda: sr.self_assign(provider))
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_customer_request_assigned(sr)
         return Response(ServiceRequestSerializer(sr).data)
 
 

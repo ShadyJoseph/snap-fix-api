@@ -88,6 +88,7 @@ make test-app app=apps.provider.tests.test_views
 make test-app app=apps.core.tests.test_views
 make test-app app=apps.customer.tests.test_views
 make test-app app=apps.provider.tests.test_provider_onboarding
+make test-app app=apps.notifications.tests.test_notifications
 
 # Run a specific test class or method
 make test-class path=apps.customer.tests.test_views.CustomerRegisterTests

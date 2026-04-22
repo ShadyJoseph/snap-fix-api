@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -43,8 +44,17 @@ INSTALLED_APPS = [
     "apps.provider.apps.ProviderConfig",
     "apps.staff.apps.StaffConfig",
     "apps.booking.apps.BookingConfig",
+    "fcm_django",
+    "apps.notifications.apps.NotificationsConfig",
     "django_extensions",
+    "django_celery_beat",
 ]
+
+FCM_DJANGO_SETTINGS = {
+    "DEFAULT_FIREBASE_APP": None,  # uses the default app initialised at startup
+    "ONE_DEVICE_PER_USER": False,  # allow multiple devices (iOS + Android)
+    "DELETE_INACTIVE_DEVICES": True,
+}
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -195,3 +205,46 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
 STRIPE_CURRENCY = "egp"
+
+# --- CELERY ---
+_REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+CELERY_BROKER_URL = _REDIS_URL
+CELERY_RESULT_BACKEND = _REDIS_URL
+
+# Always use JSON — never pickle (security).
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+
+CELERY_TIMEZONE = "UTC"
+
+# Fair dispatch: one task at a time per worker slot.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# Visibility into running tasks.
+CELERY_TASK_TRACK_STARTED = True
+
+# Suppress Celery 6.0 deprecation warning — explicitly opt in to startup retries.
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# acks_late and reject_on_worker_lost are set per-task on tasks that need
+# at-least-once delivery semantics (e.g. send_push_notification). Keeping
+# them per-task rather than global avoids unintended behaviour on future tasks
+# that don't need it.
+
+# --- CELERY BEAT SCHEDULE ---
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+CELERY_BEAT_SCHEDULE = {
+    # Deactivate FCM device records silent for 90+ days — daily at 03:00 UTC.
+    "purge-stale-fcm-devices": {
+        "task": "apps.notifications.tasks.purge_stale_fcm_devices",
+        "schedule": crontab(hour=3, minute=0),
+    },
+    # Delete read notification rows older than 90 days — Sundays at 04:00 UTC.
+    "purge-old-notifications": {
+        "task": "apps.notifications.tasks.purge_old_notifications",
+        "schedule": crontab(hour=4, minute=0, day_of_week=0),
+    },
+}

@@ -147,6 +147,30 @@ SHARED OBJECTS
 "uploaded_at": "2025-08-01T08:00:00Z"
 }
 
+<Notification> — item returned by GET /api/v1/notifications/
+{
+"id":         "uuid",
+"type":       "quote_received",
+"title":      "New Quote",
+"body":       "You received a quote of 500.00 for «Fix AC». Tap to review.",
+"data":       { "service_request_id": "uuid" },
+"is_read":    false,
+"created_at": "2026-04-11T10:00:00Z"
+}
+
+type values and their meaning:
+request_assigned      — provider picked the request
+quote_received        — provider submitted a price
+request_accepted      — provider accepted directly (no quote)
+job_started           — provider began work on-site
+job_completed         — provider marked the job done
+request_declined      — provider turned down the assignment
+cancelled_by_provider — provider cancelled the job
+quote_approved        — customer approved the quoted price
+quote_rejected        — customer rejected the quoted price
+cancelled_by_customer — customer cancelled the request
+payment_settled       — job completed, provider earnings credited
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CUSTOMERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -643,6 +667,9 @@ POST /api/v1/bookings/requests/<id>/cancel/ [customer token]
     Response 400: already completed or cancelled
     Response 404: not found or not owned by caller
 
+    Notification fired (only when a provider is assigned):
+      cancelled_by_customer → provider
+
 ────────────────────────────────────────────────────────
 
 POST /api/v1/bookings/requests/<id>/approve-quote/ [customer token]
@@ -663,6 +690,9 @@ POST /api/v1/bookings/requests/<id>/approve-quote/ [customer token]
     Response 200: <ServiceRequest>  (status: "confirmed", final_price set)
     Response 400: insufficient wallet balance, or invalid payment split
     Response 404: not found, not owned by caller, or status is not "quoted"
+
+    Notification fired:
+      quote_approved → provider
 
 ────────────────────────────────────────────────────────
 

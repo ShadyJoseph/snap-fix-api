@@ -1,8 +1,11 @@
 import logging
 
 from django.contrib import admin, messages
+from django.db import transaction
 from django.urls import reverse
 from django.utils.html import format_html
+
+from apps.notifications import service as notifications
 
 from .choices import CancelledBy, ServiceRequestStatus
 from .models import ServiceRequest, ServiceRequestPhoto
@@ -322,7 +325,9 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             obj.provider = None
             super().save_model(request, obj, form, change)
             try:
-                obj.assign(provider)
+                with transaction.atomic():
+                    obj.assign(provider)
+                    notifications.notify_customer_request_assigned(obj)
                 self.message_user(
                     request,
                     f"Provider {provider.get_full_name()} assigned successfully.",

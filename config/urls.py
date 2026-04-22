@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/v1/providers/", include("apps.provider.urls")),
     path("api/v1/core/", include("apps.core.urls")),
     path("api/v1/bookings/", include("apps.booking.urls")),
+    path("api/v1/notifications/", include("apps.notifications.urls")),
     # Serve uploaded media files from the Railway volume mounted at /app/media.
     re_path(r"^media/(?P<path>.+)$", serve, {"document_root": settings.MEDIA_ROOT}),
 ]

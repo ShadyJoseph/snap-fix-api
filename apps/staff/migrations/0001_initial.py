@@ -6,28 +6,61 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
-        ('user', '0001_initial'),
+        ("user", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='Staff',
+            name="Staff",
             fields=[
-                ('user_ptr', models.OneToOneField(auto_created=True, on_delete=django.db.models.deletion.CASCADE, parent_link=True, primary_key=True, serialize=False, to=settings.AUTH_USER_MODEL)),
-                ('can_manage_users', models.BooleanField(default=True, help_text='Can manage (create, update, delete) users')),
-                ('can_manage_services', models.BooleanField(default=True, help_text='Can manage service categories and listings')),
-                ('can_manage_payments', models.BooleanField(default=True, help_text='Can view and manage payment transactions')),
-                ('can_view_analytics', models.BooleanField(default=True, help_text='Can view platform analytics and reports')),
+                (
+                    "user_ptr",
+                    models.OneToOneField(
+                        auto_created=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        parent_link=True,
+                        primary_key=True,
+                        serialize=False,
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "can_manage_users",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Can manage (create, update, delete) users",
+                    ),
+                ),
+                (
+                    "can_manage_services",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Can manage service categories and listings",
+                    ),
+                ),
+                (
+                    "can_manage_payments",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Can view and manage payment transactions",
+                    ),
+                ),
+                (
+                    "can_view_analytics",
+                    models.BooleanField(
+                        default=True,
+                        help_text="Can view platform analytics and reports",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'Staff',
-                'verbose_name_plural': 'Staff',
-                'db_table': 'staff',
+                "verbose_name": "Staff",
+                "verbose_name_plural": "Staff",
+                "db_table": "staff",
             },
-            bases=('user.user',),
+            bases=("user.user",),
         ),
     ]
