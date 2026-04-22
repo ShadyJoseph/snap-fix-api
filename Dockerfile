@@ -25,10 +25,7 @@ COPY . .
 # Collect static files
 RUN SECRET_KEY=build-phase-dummy-key DEBUG=True python manage.py collectstatic --noinput
 
-# Run as a non-root user
-RUN useradd --no-create-home --shell /bin/false appuser \
-    && chown -R appuser:appuser /app
-USER appuser
+RUN mkdir -p /app/media
 
 EXPOSE 8080
 
