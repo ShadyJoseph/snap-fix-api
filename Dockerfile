@@ -32,4 +32,4 @@ USER appuser
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "echo \"=== PORT = ${PORT} ===\"; gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && echo \"=== PORT = ${PORT} ===\"; gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"]
