@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
+from constance import config
 from django import forms
 from django.contrib import admin, messages
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.html import format_html, mark_safe
+from django.utils.html import format_html, format_html_join, mark_safe
 
+from apps.notifications.service import (
+    notify_provider_onboarding_approved,
+    notify_provider_onboarding_changes_required,
+    notify_provider_onboarding_rejected,
+)
 from apps.staff.models import Staff
 from apps.user.models import User
 
-from .choices import OnboardingStatus, ProviderVerificationStatus
-from .models import Provider, ProviderOnboarding
+from .choices import AIValidationStatus, OnboardingStatus, ProviderVerificationStatus
+from .models import AIValidationLog, Provider, ProviderOnboarding
 
 logger = logging.getLogger(__name__)
 
@@ -198,10 +205,14 @@ class ProviderAdmin(admin.ModelAdmin):
 
 class ProviderOnboardingAdminForm(forms.ModelForm):
     """
-    Admin form for onboarding applications.
+    Admin review form for self-service onboarding applications.
 
-    No password fields — the provider set their password during app registration
-    and it is never visible or editable by staff.
+    Providers submit their own data via the mobile app. Staff use this form
+    to review documents, make corrections if needed, and set the decision
+    (approved / rejected / changes_required).
+
+    No password field — the provider set their password at registration and
+    staff never see or touch it.
     """
 
     class Meta:
@@ -247,7 +258,6 @@ class ProviderOnboardingAdminForm(forms.ModelForm):
         self.fields["reviewed_by"].widget.can_delete_related = False
 
         applicant_qs = Provider.objects.filter(
-            is_active=False,
             verification_status=ProviderVerificationStatus.PENDING,
         )
         # Always include the currently linked applicant (may already be approved).
@@ -334,9 +344,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             "approved_at",
             "rejected_at",
             "updated_at",
+            "can_resubmit_after",
         ]
         if obj is not None:
-            readonly += ["age", "provider_link", "document_preview"]
+            readonly += [
+                "age",
+                "provider_link",
+                "document_preview",
+                "ai_validation_panel",
+            ]
         return readonly
 
     def get_fieldsets(self, request, obj=None):
@@ -391,6 +407,17 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             },
         )
 
+        _fieldset_ai = (
+            "AI Document Validation",
+            {
+                "fields": ("ai_validation_panel",),
+                "description": (
+                    "Automated analysis performed by Claude Vision. "
+                    "This is an advisory report — the final decision is yours."
+                ),
+            },
+        )
+
         if obj is None:
             return (
                 ("Application Status", {"fields": ("status",)}),
@@ -409,7 +436,19 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             _FIELDSET_LOCATION,
             _FIELDSET_PROFESSIONAL,
             documents_with_preview,
+            _fieldset_ai,
             _FIELDSET_REVIEW,
+            (
+                "Resubmission",
+                {
+                    "fields": ("can_resubmit_after",),
+                    "classes": ("collapse",),
+                    "description": (
+                        "Set automatically on rejection. The cooldown duration is "
+                        "configured in Constance → ONBOARDING_REJECTION_COOLDOWN_DAYS."
+                    ),
+                },
+            ),
             (
                 "Timestamps",
                 {
@@ -449,6 +488,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     @admin.display(description="Status")
     def status_badge(self, obj: ProviderOnboarding) -> str:
         colors = {
+            OnboardingStatus.DRAFT: "#9E9E9E",
             OnboardingStatus.PENDING: "#FFA500",
             OnboardingStatus.UNDER_REVIEW: "#2196F3",
             OnboardingStatus.CHANGES_REQUIRED: "#FF9800",
@@ -481,25 +521,35 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         parts = []
 
         def img_card(label: str, f) -> str:
-            return (
-                f'<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
-                f'<strong style="color:#666">{label}</strong><br><br>'
-                f'<img src="{f.url}" style="max-width:100%;max-height:200px;border-radius:4px">'
-                f"</div>"
+            return format_html(
+                '<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
+                '<strong style="color:#666">{}</strong><br><br>'
+                '<img src="{}" style="max-width:100%;max-height:200px;border-radius:4px">'
+                "</div>",
+                label,
+                f.url,
             )
 
         def link_card(label: str, f) -> str:
-            return (
-                f'<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
-                f'<strong style="color:#666">{label}</strong><br><br>'
-                f'<a href="{f.url}" target="_blank" style="color:#2196F3">View Document</a>'
-                f"</div>"
+            return format_html(
+                '<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
+                '<strong style="color:#666">{}</strong><br><br>'
+                '<a href="{}" target="_blank" style="color:#2196F3">View Document</a>'
+                "</div>",
+                label,
+                f.url,
             )
 
+        def auto_card(label: str, f) -> str:
+            """Use img_card for images, link_card for PDFs."""
+            if f.name and f.name.lower().endswith(".pdf"):
+                return link_card(label, f)
+            return img_card(label, f)
+
         if obj.nid_front:
-            parts.append(img_card("NID Front", obj.nid_front))
+            parts.append(auto_card("NID Front", obj.nid_front))
         if obj.nid_back:
-            parts.append(img_card("NID Back", obj.nid_back))
+            parts.append(auto_card("NID Back", obj.nid_back))
         if obj.police_clearance_certificate:
             parts.append(
                 link_card("Police Clearance", obj.police_clearance_certificate)
@@ -518,6 +568,125 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
             + "".join(parts)
             + "</div>"
+        )
+
+    @admin.display(description="AI Validation Report")
+    def ai_validation_panel(self, obj: ProviderOnboarding) -> str:
+        ai_status = obj.ai_validation_status
+        report = obj.ai_validation_report or {}
+
+        status_colors = {
+            AIValidationStatus.PENDING: ("#9E9E9E", "Pending"),
+            AIValidationStatus.RUNNING: ("#2196F3", "Running…"),
+            AIValidationStatus.PASSED: ("#4CAF50", "Passed"),
+            AIValidationStatus.FLAGGED: ("#FF9800", "Flagged — Needs Review"),
+            AIValidationStatus.FAILED: ("#F44336", "Failed"),
+        }
+        color, label = status_colors.get(ai_status, ("#9E9E9E", ai_status))
+
+        badge = format_html(
+            '<span style="background:{};color:white;padding:4px 12px;'
+            "border-radius:12px;font-weight:bold;font-size:11px;"
+            'text-transform:uppercase">{}</span>',
+            color,
+            label,
+        )
+
+        if not report:
+            return format_html(
+                '{}<p style="color:#999;margin-top:8px">No report available yet.</p>',
+                badge,
+            )
+
+        confidence = report.get("overall_confidence")
+        confidence_html = (
+            format_html(
+                '<p style="margin:6px 0"><strong>Confidence:</strong> {:.0%}</p>',
+                confidence,
+            )
+            if confidence is not None
+            else ""
+        )
+
+        issues = report.get("issues", [])
+        issues_html = ""
+        if issues:
+            items = format_html_join("", "<li>{}</li>", ((issue,) for issue in issues))
+            issues_html = format_html(
+                '<div style="margin-top:8px">'
+                '<strong style="color:#F44336">Issues found:</strong>'
+                '<ul style="margin:4px 0 0 16px">{}</ul></div>',
+                items,
+            )
+
+        doc_checks = report.get("document_checks", {})
+        doc_rows = []
+        doc_labels_map = {
+            "nid_front": "NID Front",
+            "nid_back": "NID Back",
+            "police_clearance": "Police Clearance",
+            "professional_cert": "Professional Certificate",
+        }
+        for key, label_text in doc_labels_map.items():
+            check = doc_checks.get(key, {})
+            if not isinstance(check, dict):
+                continue
+            valid = check.get("valid")
+            notes = check.get("notes", "")
+            if valid is True:
+                icon, icon_color = "✔", "#4CAF50"
+            elif valid is False:
+                icon, icon_color = "✘", "#F44336"
+            else:
+                icon, icon_color = "-", "#9E9E9E"
+            doc_rows.append(
+                format_html(
+                    "<tr>"
+                    '<td style="padding:4px 8px;font-weight:bold">{}</td>'
+                    '<td style="padding:4px 8px;color:{};font-weight:bold">{}</td>'
+                    '<td style="padding:4px 8px;color:#555">{}</td>'
+                    "</tr>",
+                    label_text,
+                    icon_color,
+                    icon,
+                    notes,
+                )
+            )
+
+        docs_table = ""
+        if doc_rows:
+            docs_table = format_html(
+                '<table style="margin-top:8px;border-collapse:collapse;width:100%">'
+                '<thead><tr style="background:#f5f5f5">'
+                '<th style="padding:4px 8px;text-align:left">Document</th>'
+                '<th style="padding:4px 8px;text-align:left">Status</th>'
+                '<th style="padding:4px 8px;text-align:left">Notes</th>'
+                "</tr></thead><tbody>{}</tbody></table>",
+                mark_safe("".join(doc_rows)),  # noqa: S308
+            )
+
+        age_check = report.get("age_check", {})
+        age_html = ""
+        if isinstance(age_check, dict) and age_check.get("notes"):
+            age_icon = "✔" if age_check.get("consistent") else "✘"
+            age_color = "#4CAF50" if age_check.get("consistent") else "#F44336"
+            age_html = format_html(
+                '<p style="margin-top:8px">'
+                "<strong>Age check:</strong> "
+                '<span style="color:{}">{} {}</span>'
+                "</p>",
+                age_color,
+                age_icon,
+                age_check["notes"],
+            )
+
+        return format_html(
+            '<div style="padding:8px">{}{}{}{}{}</div>',
+            badge,
+            confidence_html,
+            issues_html,
+            age_html,
+            docs_table,
         )
 
     # ── Save with FSM enforcement ─────────────────────────────────────────────
@@ -594,6 +763,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 # Step 3: activate the provider account.
                 obj.approve(reviewer)
 
+                # Notify the provider of their approval.
+                try:
+                    obj.refresh_from_db()
+                    notify_provider_onboarding_approved(obj)
+                except Exception:
+                    logger.exception(
+                        "Failed to send onboarding approved notification for %s", obj.pk
+                    )
+
                 self.message_user(
                     request,
                     f"Provider account for {obj.get_full_name()} has been activated. "
@@ -611,7 +789,11 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         "Application must be Under Review first."
                     )
                 stamp_reviewer(obj, request.user)
-                obj.rejected_at = timezone.now()
+                now_ts = timezone.now()
+                obj.rejected_at = now_ts
+                obj.can_resubmit_after = now_ts + timedelta(
+                    days=config.ONBOARDING_REJECTION_COOLDOWN_DAYS
+                )
                 if not obj.rejection_reason:
                     self.message_user(
                         request,
@@ -619,6 +801,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         messages.WARNING,
                     )
                 super().save_model(request, obj, form, change)
+
+                # Notify the provider of the rejection.
+                try:
+                    obj.refresh_from_db()
+                    notify_provider_onboarding_rejected(obj)
+                except Exception:
+                    logger.exception(
+                        "Failed to send onboarding rejected notification for %s", obj.pk
+                    )
 
             elif new_status == OnboardingStatus.CHANGES_REQUIRED:
                 if old_status != OnboardingStatus.UNDER_REVIEW:
@@ -635,6 +826,15 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                         messages.WARNING,
                     )
                 super().save_model(request, obj, form, change)
+
+                # Notify the provider of required changes.
+                try:
+                    obj.refresh_from_db()
+                    notify_provider_onboarding_changes_required(obj)
+                except Exception:
+                    logger.exception(
+                        "Failed to send changes-required notification for %s", obj.pk
+                    )
 
             else:
                 super().save_model(request, obj, form, change)
@@ -705,6 +905,12 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                     reviewer,
                     reason=app.rejection_reason or "Rejected via bulk action.",
                 )
+                try:
+                    notify_provider_onboarding_rejected(app)
+                except Exception:
+                    logger.exception(
+                        "Failed to send rejection notification for %s", app.pk
+                    )
                 success += 1
             except Exception as exc:
                 logger.exception("Error rejecting %s", app.pk)
@@ -717,3 +923,140 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             self.message_user(
                 request, f"{skip} skipped (wrong status).", messages.WARNING
             )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Validation Log Admin
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@admin.register(AIValidationLog)
+class AIValidationLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "triggered_at",
+        "applicant_name",
+        "onboarding_link",
+        "outcome_badge",
+        "model_id",
+        "latency_ms",
+        "total_tokens_display",
+        "documents_sent_display",
+    )
+    list_filter = ("outcome", "model_id", "triggered_at")
+    search_fields = (
+        "applicant_snapshot__full_name",
+        "applicant_snapshot__phone",
+        "onboarding__email",
+    )
+    date_hierarchy = "triggered_at"
+    ordering = ["-triggered_at"]
+
+    readonly_fields = (
+        "id",
+        "triggered_at",
+        "onboarding_link",
+        "outcome_badge",
+        "applicant_snapshot",
+        "documents_sent",
+        "model_id",
+        "latency_ms",
+        "input_tokens",
+        "output_tokens",
+        "raw_response",
+        "parsed_report",
+        "error_message",
+    )
+
+    fieldsets = (
+        (
+            "Overview",
+            {
+                "fields": (
+                    "id",
+                    "triggered_at",
+                    "onboarding_link",
+                    "outcome_badge",
+                ),
+            },
+        ),
+        (
+            "Input",
+            {
+                "fields": ("applicant_snapshot", "documents_sent"),
+            },
+        ),
+        (
+            "Performance",
+            {
+                "fields": ("model_id", "latency_ms", "input_tokens", "output_tokens"),
+            },
+        ),
+        (
+            "Response",
+            {
+                "fields": ("parsed_report", "raw_response", "error_message"),
+            },
+        ),
+    )
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+    def has_delete_permission(self, request, obj=None) -> bool:
+        return request.user.is_superuser
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("onboarding")
+
+    # ── Display helpers ───────────────────────────────────────────────────────
+
+    @admin.display(description="Applicant", ordering="triggered_at")
+    def applicant_name(self, obj: AIValidationLog) -> str:
+        return obj.applicant_snapshot.get("full_name", "—")
+
+    @admin.display(description="Onboarding")
+    def onboarding_link(self, obj: AIValidationLog) -> str:
+        if not obj.onboarding_id:
+            return format_html('<span style="color:#999;font-style:italic">Deleted</span>')
+        url = reverse(
+            "admin:provider_provideronboarding_change", args=[obj.onboarding_id]
+        )
+        label = (
+            obj.onboarding.get_full_name() if obj.onboarding else str(obj.onboarding_id)
+        )
+        return format_html('<a href="{}">{}</a>', url, label)
+
+    @admin.display(description="Outcome")
+    def outcome_badge(self, obj: AIValidationLog) -> str:
+        colors = {
+            "passed": "#4CAF50",
+            "flagged": "#FF9800",
+            "failed": "#F44336",
+            "bypassed": "#9E9E9E",
+            "error": "#9C27B0",
+        }
+        color = colors.get(obj.outcome, "#757575")
+        return format_html(
+            '<span style="background:{};color:white;padding:3px 10px;'
+            "border-radius:10px;font-weight:bold;font-size:10px;"
+            'text-transform:uppercase">{}</span>',
+            color,
+            obj.get_outcome_display(),
+        )
+
+    @admin.display(description="Documents")
+    def documents_sent_display(self, obj: AIValidationLog) -> str:
+        docs = obj.documents_sent
+        if not docs:
+            return mark_safe('<span style="color:#999">none</span>')  # noqa: S308
+        return ", ".join(docs)
+
+    @admin.display(description="Tokens")
+    def total_tokens_display(self, obj: AIValidationLog) -> str:
+        total = obj.total_tokens
+        if total is None:
+            return "—"
+        return f"{total:,}"

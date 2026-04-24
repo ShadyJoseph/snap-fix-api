@@ -30,13 +30,17 @@ class ProviderRegisterTests(APITestCase):
 
         provider = Provider.objects.get(email=payload["email"])
 
-        self.assertFalse(provider.is_active)
+        # Newly registered providers are active so they can authenticate for the
+        # self-service onboarding flow (Knox token is issued for this purpose).
+        # Access to active-provider features is gated by verification_status=PENDING.
+        self.assertTrue(provider.is_active)
         self.assertEqual(
             provider.verification_status,
             ProviderVerificationStatus.PENDING,
         )
 
-    def test_register_no_token_issued(self):
+    def test_register_returns_onboarding_token_not_plain_token(self):
+        """Response key is 'onboarding_token', never the plain 'token' used by login."""
         payload = {
             "email": "new_provider@test.com",
             "first_name": "Jane",
@@ -47,6 +51,7 @@ class ProviderRegisterTests(APITestCase):
 
         response = self.client.post(self.url, payload)
 
+        self.assertIn("onboarding_token", response.data)
         self.assertNotIn("token", response.data)
 
     def test_register_duplicate_email(self):

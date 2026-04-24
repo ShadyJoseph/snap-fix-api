@@ -60,7 +60,7 @@ def purge_stale_fcm_devices():
     from django.utils import timezone
 
     cutoff = timezone.now() - timedelta(days=90)
-    updated = FCMDevice.objects.filter(active=True, date_updated__lt=cutoff).update(
+    updated = FCMDevice.objects.filter(active=True, date_created__lt=cutoff).update(
         active=False
     )
     logger.info("purge_stale_fcm_devices: deactivated %d device(s)", updated)

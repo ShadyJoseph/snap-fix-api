@@ -15,7 +15,8 @@ Suites
 
 Flow
 ----
-All providers MUST register via the mobile app before visiting the office.
+Providers register via the mobile app, submit their own documents and details
+(self-service), and staff approve via the Admin Dashboard.
 Staff never set or see a password — the provider's registration password is
 the only password and is preserved exactly as set during registration.
 
@@ -78,35 +79,43 @@ class ProviderModelTests(TestCase):
         self.region = make_region()
         self.category = make_category()
 
-    def test_register_creates_inactive_pending_provider(self) -> None:
-        _section("1.1 - API registration → inactive + pending provider")
+    def test_register_creates_active_pending_provider(self) -> None:
+        _section("1.1 - API registration → active (for Knox) + pending provider")
         from apps.provider.choices import ProviderVerificationStatus
 
-        provider = make_provider(email="new_reg@test.com", active=False, verified=False)
+        # is_active=True so Knox allows token auth during onboarding;
+        # verification_status=PENDING restricts access to active-provider features.
+        provider = make_provider(email="new_reg@test.com", active=True, verified=False)
         _show("is_active", provider.is_active)
         _show("verification_status", provider.verification_status)
 
-        self.assertFalse(provider.is_active)
+        self.assertTrue(provider.is_active)
         self.assertEqual(
             provider.verification_status, ProviderVerificationStatus.PENDING
         )
         _ok("Registration creates correct initial state")
 
-    def test_inactive_provider_cannot_login(self) -> None:
-        _section("1.2 - Inactive provider login attempt is blocked")
+    def test_pending_provider_cannot_login(self) -> None:
+        _section(
+            "1.2 - PENDING provider login attempt is blocked via verification_status"
+        )
         from rest_framework.exceptions import ValidationError as DRFValidationError
 
         from apps.provider.serializers import ProviderLoginSerializer
 
-        make_provider(email="inactive@test.com", active=False)
+        # is_active=True (Knox requires it); blocked by verification_status=PENDING
+        password = "pass1234!!"  # noqa: S106
+        make_provider(
+            email="pending@test.com", active=True, verified=False, password=password
+        )
         serializer = ProviderLoginSerializer(
-            data={"email": "inactive@test.com", "password": "pass1234!!"}  # noqa: S106
+            data={"email": "pending@test.com", "password": "pass1234!!"}  # noqa: S106
         )
         with self.assertRaises(DRFValidationError) as ctx:
             serializer.is_valid(raise_exception=True)
 
         _show("error detail", str(ctx.exception.detail))
-        _ok("Inactive provider correctly blocked from logging in")
+        _ok("PENDING provider correctly blocked from logging in")
 
     def test_verified_provider_can_login(self) -> None:
         _section("1.3 - Verified active provider login succeeds")
@@ -702,11 +711,12 @@ class OnboardingEdgeCaseTests(TestCase):
         _step("Step 1: Provider registers via API …")
         provider = make_provider(
             email="happypath@test.com",
-            active=False,
+            active=True,
             verified=False,
             password="my_app_password!!",  # noqa: S106
         )
-        self.assertFalse(provider.is_active)
+        # is_active=True at registration so Knox allows onboarding token auth
+        self.assertTrue(provider.is_active)
 
         _step("Step 2: Staff creates onboarding application …")
         app = make_onboarding(

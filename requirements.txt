@@ -21,3 +21,8 @@ celery[redis]==5.4.0
 redis==5.2.1
 firebase-admin>=6.0.0
 django-celery-beat>=2.7.0
+anthropic>=0.40.0
+django-constance[redis]>=4.1.0
+openai>=1.14.0
+groq>=0.4.2
+google-generativeai>=0.4.0

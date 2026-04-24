@@ -39,7 +39,7 @@ Celery Beat scheduler
 | ----------------------- | --------------------------------- | ------------------------------------------------------ |
 | Inbox always up-to-date | Yes — even if Redis is down       | Not applicable                                         |
 | Non-blocking            | No, but it is one INSERT          | Yes — Gunicorn worker is freed immediately             |
-| Retries on failure      | Not needed (Postgres is reliable) | Yes — 3× with exponential back-off (60s → 120s → 240s) |
+| Retries on failure      | Not needed (Postgres is reliable) | Yes — 3x with exponential back-off (60s → 120s → 240s) |
 | What it powers          | In-app notification list          | OS notification tray                                   |
 
 The DB write is the source of truth. The FCM push is best-effort delivery to the lock screen. If the Celery broker is unreachable, the inbox row is still saved and a warning is logged — the HTTP response never fails because of a missed push.
@@ -50,17 +50,21 @@ The DB write is the source of truth. The FCM push is best-effort delivery to the
 
 | `type`                  | Recipient | Triggered when                                           | FSM transition            | Trigger path                                                |
 | ----------------------- | --------- | -------------------------------------------------------- | ------------------------- | ----------------------------------------------------------- |
-| `request_assigned`      | Customer  | Provider picks from pool **or** admin assigns            | `pending → assigned`      | View + Admin `save_model`                                   |
-| `quote_received`        | Customer  | Provider submits a price                                 | `assigned → quoted`       | View                                                        |
-| `request_accepted`      | Customer  | Provider accepts directly (no quote)                     | `assigned → confirmed`    | View                                                        |
-| `job_started`           | Customer  | Provider begins work                                     | `confirmed → in_progress` | View                                                        |
-| `job_completed`         | Customer  | Provider marks job done                                  | `in_progress → completed` | View                                                        |
-| `request_declined`      | Customer  | Provider turns down the assignment                       | `assigned → pending`      | View                                                        |
-| `cancelled_by_provider` | Customer  | Provider cancels the job                                 | `any → cancelled`         | View                                                        |
-| `quote_approved`        | Provider  | Customer approves the quoted price                       | `quoted → confirmed`      | View                                                        |
-| `quote_rejected`        | Provider  | Customer rejects the quoted price                        | `quoted → pending`        | View (provider snapshot passed, sr.provider cleared by FSM) |
-| `cancelled_by_customer` | Provider  | Customer cancels the request (only if provider assigned) | `any → cancelled`         | View (provider snapshot passed)                             |
-| `payment_settled`       | Provider  | Job completed, earnings credited                         | `in_progress → completed` | View                                                        |
+| `request_assigned`              | Customer  | Provider picks from pool **or** admin assigns            | `pending → assigned`              | View + Admin `save_model`                                   |
+| `quote_received`                | Customer  | Provider submits a price                                 | `assigned → quoted`               | View                                                        |
+| `request_accepted`              | Customer  | Provider accepts directly (no quote)                     | `assigned → confirmed`            | View                                                        |
+| `job_started`                   | Customer  | Provider begins work                                     | `confirmed → in_progress`         | View                                                        |
+| `job_completed`                 | Customer  | Provider marks job done                                  | `in_progress → completed`         | View                                                        |
+| `request_declined`              | Customer  | Provider turns down the assignment                       | `assigned → pending`              | View                                                        |
+| `cancelled_by_provider`         | Customer  | Provider cancels the job                                 | `any → cancelled`                 | View                                                        |
+| `quote_approved`                | Provider  | Customer approves the quoted price                       | `quoted → confirmed`              | View                                                        |
+| `quote_rejected`                | Provider  | Customer rejects the quoted price                        | `quoted → pending`                | View (provider snapshot passed, sr.provider cleared by FSM) |
+| `cancelled_by_customer`         | Provider  | Customer cancels the request (only if provider assigned) | `any → cancelled`                 | View (provider snapshot passed)                             |
+| `payment_settled`               | Provider  | Job completed, earnings credited                         | `in_progress → completed`         | View                                                        |
+| `onboarding_approved`           | Provider  | Staff approves the onboarding application                | `under_review → approved`         | Admin `save_model`                                          |
+| `onboarding_rejected`           | Provider  | Staff rejects the application                            | `under_review → rejected`         | Admin `save_model`                                          |
+| `onboarding_changes_required`   | Provider  | Staff requests corrections before approval               | `under_review → changes_required` | Admin `save_model`                                          |
+| `onboarding_resubmit_available` | Provider  | 30-day (configurable) rejection cooldown has expired     | —                                 | Celery Beat daily task                                      |
 
 ---
 
@@ -137,7 +141,7 @@ Call this on every app launch — the FCM token can rotate. The call is idempote
 
 - Rate-limited to **10 registration attempts per hour** per user.
 - A user may have at most **5 active devices** simultaneously. Re-registering an existing token does not count against the cap. To register a 6th device, first delete an existing one.
-- Token must be **50–512 characters**, containing only `[A-Za-z0-9\-_:]`. Tokens outside this range are rejected immediately (before reaching Firebase).
+- Token must be **50-512 characters**, containing only `[A-Za-z0-9\-_:]`. Tokens outside this range are rejected immediately (before reaching Firebase).
 
 **Responses:**
 
@@ -329,6 +333,10 @@ Fetch `GET /api/v1/notifications/` on app open and after each incoming push to k
 | `GOOGLE_APPLICATION_CREDENTIALS`      | Local `.env` / docker-compose secrets     | Path to the Firebase service-account JSON file (local dev) |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Railway → Variables                       | Full JSON content of the service-account file (production) |
 | `REDIS_URL`                           | Set automatically by Railway Redis plugin | Celery broker + result backend                             |
+| `ANTHROPIC_API_KEY`                   | Railway → Variables / `.env`              | Anthropic Claude Haiku — AI document validation            |
+| `OPENAI_API_KEY`                      | Railway → Variables / `.env`              | OpenAI GPT-4o-mini — AI document validation                |
+| `GROQ_API_KEY`                        | Railway → Variables / `.env`              | Groq Llama vision — AI document validation                 |
+| `GEMINI_API_KEY`                      | Railway → Variables / `.env`              | Google Gemini 1.5 Flash — AI document validation           |
 
 **Production startup behaviour:** If neither credential variable is set, or if Firebase initialization fails for any reason (e.g. malformed JSON, invalid key), the app raises at startup and refuses to start when `DEBUG=False`. In development (`DEBUG=True`) it logs a warning and continues — push notifications will not be delivered but the inbox API works normally.
 

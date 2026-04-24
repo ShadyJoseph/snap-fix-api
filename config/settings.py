@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.notifications.apps.NotificationsConfig",
     "django_extensions",
     "django_celery_beat",
+    "constance",
 ]
 
 FCM_DJANGO_SETTINGS = {
@@ -206,6 +207,55 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
 STRIPE_CURRENCY = "egp"
 
+# --- ANTHROPIC (AI document validation) ---
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+
+# --- OPENAI, GROQ, GEMINI ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# --- CONSTANCE (runtime-togglable settings) ---
+# Uses the existing Redis instance — no extra infrastructure needed.
+# Values are editable live via Django Admin → Constance → Change without restarting.
+CONSTANCE_BACKEND = "constance.backends.redisd.RedisBackend"
+CONSTANCE_REDIS_CONNECTION = os.getenv("REDIS_URL", "redis://redis:6379/0")
+CONSTANCE_REDIS_PREFIX = "constance:"
+
+CONSTANCE_CONFIG = {
+    # AI
+    "AI_VALIDATION_ENABLED": (
+        True,
+        "Enable Claude Vision AI document validation on onboarding submissions. "
+        "Disable to skip the API call and auto-pass all documents (useful for testing).",
+        bool,
+    ),
+    "AI_VALIDATION_PROVIDER": (
+        "all",
+        "Which AI provider to use. Choices: openai, groq, gemini, anthropic, all.",
+        str,
+    ),
+    # Onboarding rules
+    "ONBOARDING_REJECTION_COOLDOWN_DAYS": (
+        30,
+        "Number of days a provider must wait after rejection before they can resubmit.",
+        int,
+    ),
+    "ONBOARDING_MAX_FILE_SIZE_MB": (
+        5,
+        "Maximum allowed size (in MB) for each document uploaded during onboarding.",
+        int,
+    ),
+}
+
+CONSTANCE_CONFIG_FIELDSETS = {
+    "AI Settings": ("AI_VALIDATION_ENABLED", "AI_VALIDATION_PROVIDER"),
+    "Onboarding Rules": (
+        "ONBOARDING_REJECTION_COOLDOWN_DAYS",
+        "ONBOARDING_MAX_FILE_SIZE_MB",
+    ),
+}
+
 # --- CELERY ---
 _REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
@@ -246,5 +296,10 @@ CELERY_BEAT_SCHEDULE = {
     "purge-old-notifications": {
         "task": "apps.notifications.tasks.purge_old_notifications",
         "schedule": crontab(hour=4, minute=0, day_of_week=0),
+    },
+    # Notify rejected providers when their 30-day resubmission cooldown lifts — daily at 08:00 UTC.
+    "notify-resubmit-available": {
+        "task": "apps.provider.tasks.notify_resubmit_available",
+        "schedule": crontab(hour=8, minute=0),
     },
 }

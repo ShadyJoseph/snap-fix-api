@@ -152,7 +152,7 @@ img = make_image("photo.png")
 
 | Function                                                                 | Creates                           |
 | ------------------------------------------------------------------------ | --------------------------------- |
-| `make_image(name)`                                                       | `SimpleUploadedFile` (1×1 PNG)    |
+| `make_image(name)`                                                       | `SimpleUploadedFile` (1x1 PNG)    |
 | `make_region(**kwargs)`                                                  | `Region`                          |
 | `make_category(**kwargs)`                                                | `Category`                        |
 | `make_office(region, **kwargs)`                                          | `Office`                          |

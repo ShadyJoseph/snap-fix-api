@@ -202,3 +202,78 @@ def notify_provider_payment_settled(sr):
         body=f"Payment of {sr.final_price} for «{sr.title}» has been settled. Check your earnings.",
         data={"service_request_id": str(sr.id)},
     )
+
+
+# ── Onboarding notifications ───────────────────────────────────────────────────
+
+
+def notify_provider_onboarding_approved(onboarding):
+    """Staff approved the provider's onboarding application."""
+    notify(
+        recipient=onboarding.applicant,
+        notification_type=NotificationType.ONBOARDING_APPROVED,
+        title="Application Approved!",
+        body=(
+            f"Congratulations {onboarding.first_name}! Your provider account has been "
+            "approved. You can now log in and start accepting jobs."
+        ),
+        data={"onboarding_id": str(onboarding.pk)},
+    )
+
+
+def notify_provider_onboarding_rejected(onboarding):
+    """Staff rejected the provider's onboarding application."""
+    resubmit_date = (
+        onboarding.can_resubmit_after.strftime("%Y-%m-%d")
+        if onboarding.can_resubmit_after
+        else "30 days from now"
+    )
+    reason_snippet = (onboarding.rejection_reason or "No reason provided.")[:200]
+    notify(
+        recipient=onboarding.applicant,
+        notification_type=NotificationType.ONBOARDING_REJECTED,
+        title="Application Not Approved",
+        body=(
+            f"Unfortunately your application was not approved. Reason: {reason_snippet} "
+            f"You may resubmit after {resubmit_date}."
+        ),
+        data={
+            "onboarding_id": str(onboarding.pk),
+            "rejection_reason": onboarding.rejection_reason,
+            "can_resubmit_after": resubmit_date,
+        },
+    )
+
+
+def notify_provider_onboarding_changes_required(onboarding):
+    """Staff requested changes to the provider's onboarding application."""
+    changes_snippet = (
+        onboarding.change_requests or "Please check the app for details."
+    )[:200]
+    notify(
+        recipient=onboarding.applicant,
+        notification_type=NotificationType.ONBOARDING_CHANGES_REQUIRED,
+        title="Changes Required",
+        body=(
+            f"Your application needs updates before it can be reviewed. "
+            f"Required changes: {changes_snippet}"
+        ),
+        data={
+            "onboarding_id": str(onboarding.pk),
+            "change_requests": onboarding.change_requests,
+        },
+    )
+
+
+def notify_provider_resubmit_available(provider):
+    """30-day rejection cooldown has expired — provider can reapply."""
+    notify(
+        recipient=provider,
+        notification_type=NotificationType.ONBOARDING_RESUBMIT_AVAILABLE,
+        title="You Can Reapply Now",
+        body=(
+            "Your 30-day waiting period has ended. You can now resubmit your "
+            "provider application from the app."
+        ),
+        data={},
+    )

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
+from constance import config
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import UploadedFile
 from django.core.validators import (
@@ -19,15 +20,13 @@ from django.utils import timezone
 from apps.staff.models import Staff
 from apps.user.models import User
 
-from .choices import OnboardingStatus, ProviderVerificationStatus
+from .choices import AIValidationStatus, OnboardingStatus, ProviderVerificationStatus
 from .managers import ProviderManager, ProviderOnboardingManager
 
 phone_validator = RegexValidator(
     regex=r"^(\+?20)?01[0125]\d{8}$",
     message="Must be a valid Egyptian mobile number (e.g., 01012345678 or +201012345678).",
 )
-
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
 
 class Provider(User):
@@ -145,17 +144,18 @@ class Provider(User):
 
 class ProviderOnboarding(models.Model):
     """
-    Onboarding application filled by staff at the office.
-    Single source of truth for all provider documents.
+    Onboarding application filled by the provider via the mobile app.
+    Single source of truth for all provider documents and verification status.
 
-    The provider MUST register via the mobile app before visiting the office.
-    Staff fill in documents and verify details — they never set a password.
+    The provider registers via the mobile app, submits their personal details
+    and documents, which creates a DRAFT application. Once submitted, it moves
+    to PENDING and is processed by AI, then reviewed by staff.
 
     State machine
     -------------
-    pending → under_review → approved
-                           → rejected
-                           → changes_required → under_review (repeat)
+    draft → pending → under_review → approved
+                                   → rejected
+                                   → changes_required → under_review (repeat)
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -170,27 +170,35 @@ class ProviderOnboarding(models.Model):
         related_name="pending_application",
     )
 
-    # Personal details — editable by staff at the office
+    # Personal details — submitted by the provider, verified by staff on review
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     email = models.EmailField(unique=True, db_index=True)
     phone = models.CharField(max_length=20, validators=[phone_validator])
-    date_of_birth = models.DateField()
-    address = models.TextField()
+    # Nullable so a DRAFT can be saved before all required fields are filled.
+    # OnboardingSubmitView enforces completeness before moving to PENDING.
+    date_of_birth = models.DateField(null=True, blank=True)
+    address = models.TextField(blank=True)
 
     region = models.ForeignKey(
         "core.Region",
         on_delete=models.PROTECT,
         related_name="onboarding_applications",
+        null=True,
+        blank=True,
     )
     category = models.ForeignKey(
         "core.Category",
         on_delete=models.PROTECT,
         related_name="onboarding_applications",
+        null=True,
+        blank=True,
     )
     hourly_rate = models.DecimalField(
         max_digits=10,
         decimal_places=2,
+        null=True,
+        blank=True,
         validators=[MinValueValidator(0)],
     )
     years_of_experience = models.IntegerField(
@@ -225,11 +233,12 @@ class ProviderOnboarding(models.Model):
         validators=[FileExtensionValidator(["jpg", "jpeg", "png"])],
     )
 
-    # Review state
+    # Review state — starts as DRAFT when the provider self-submits,
+    # or PENDING when staff create it directly from the admin.
     status = models.CharField(
         max_length=max(len(c[0]) for c in OnboardingStatus.choices),
         choices=OnboardingStatus.choices,
-        default=OnboardingStatus.PENDING,
+        default=OnboardingStatus.DRAFT,
         db_index=True,
     )
     reviewed_by = models.ForeignKey(
@@ -251,6 +260,18 @@ class ProviderOnboarding(models.Model):
         blank=True,
         related_name="onboarding_application",
     )
+
+    # AI validation
+    ai_validation_status = models.CharField(
+        max_length=10,
+        choices=AIValidationStatus.choices,
+        default=AIValidationStatus.PENDING,
+        db_index=True,
+    )
+    ai_validation_report = models.JSONField(default=dict, blank=True)
+
+    # Resubmission cooldown — set to rejected_at + 30 days on rejection
+    can_resubmit_after = models.DateTimeField(null=True, blank=True)
 
     # Timestamps
     submitted_at = models.DateTimeField(default=timezone.now)
@@ -291,7 +312,7 @@ class ProviderOnboarding(models.Model):
     def clean(self) -> None:
         super().clean()
 
-        if self.date_of_birth and self.age < 18:
+        if self.date_of_birth is not None and self.age < 18:
             raise ValidationError({"date_of_birth": "Applicant must be 18 or older."})
 
         # Enforce that the applicant FK always matches the onboarding email.
@@ -306,12 +327,11 @@ class ProviderOnboarding(models.Model):
                 }
             )
 
-        # On create: block duplicate emails unless it belongs to a pending
-        # (not-yet-activated) provider who is completing onboarding.
+        # On create: block duplicate emails unless they belong to a PENDING provider
+        # completing self-service onboarding (is_active=True since we allow Knox auth).
         if not self.pk and User.objects.filter(email=self.email).exists():
             is_pending_provider = Provider.objects.filter(
                 email=self.email,
-                is_active=False,
                 verification_status=ProviderVerificationStatus.PENDING,
             ).exists()
             if not is_pending_provider:
@@ -333,9 +353,12 @@ class ProviderOnboarding(models.Model):
             if not isinstance(raw, UploadedFile):
                 continue
             try:
-                if f.size > MAX_FILE_SIZE:
+                max_bytes = config.ONBOARDING_MAX_FILE_SIZE_MB * 1024 * 1024
+                if f.size > max_bytes:
                     raise ValidationError(
-                        {field_name: "File size must not exceed 5 MB."}
+                        {
+                            field_name: f"File size must not exceed {config.ONBOARDING_MAX_FILE_SIZE_MB} MB."
+                        }
                     )
             except (FileNotFoundError, OSError):
                 pass
@@ -346,6 +369,14 @@ class ProviderOnboarding(models.Model):
         return self.status in (
             OnboardingStatus.PENDING,
             OnboardingStatus.CHANGES_REQUIRED,
+        )
+
+    @property
+    def can_resubmit(self) -> bool:
+        return (
+            self.status == OnboardingStatus.REJECTED
+            and self.can_resubmit_after is not None
+            and timezone.now() >= self.can_resubmit_after
         )
 
     def can_approve(self) -> bool:
@@ -372,38 +403,36 @@ class ProviderOnboarding(models.Model):
         """
         Approve the application and activate the provider account.
 
-        The provider must have pre-registered via the app. Their password is
-        preserved exactly as they set it — staff never touch it.
+        Syncs staff-verified fields from the onboarding form onto the provider
+        row. The provider's password is never touched — they set it at registration.
 
-        Raises ValueError if no pre-registered account is found.
+        Raises ValueError if the application is not under review, or if no
+        pre-registered provider account exists for this email.
 
-        The caller (save_model) must save form data first and call
-        refresh_from_db() before invoking this method.
+        Note: the admin save_model saves form data first and calls refresh_from_db()
+        before invoking this method so the latest form values are picked up.
         """
         if not self.can_approve():
             raise ValueError(f"Cannot approve from '{self.status}'.")
 
-        # Resolve the provider account. Prefer the explicit FK; fall back to
-        # an inactive provider with the same email.
-        existing = (
-            self.applicant
-            if self.applicant_id
-            else User.objects.filter(email=self.email, is_active=False).first()
-        )
+        # Prefer the explicit applicant FK (set in self-service flow).
+        # Fall back to email lookup for legacy staff-created applications where
+        # the FK was not set.
+        if self.applicant_id:
+            provider = self.applicant
+        else:
+            provider = Provider.objects.filter(
+                email=self.email,
+                verification_status=ProviderVerificationStatus.PENDING,
+            ).first()
+            if provider is None:
+                raise ValueError(
+                    f"No pre-registered provider found for '{self.email}'. "
+                    "The provider must register via the app before approval."
+                )
 
-        if existing is None:
-            raise ValueError(
-                f"No pre-registered provider found for '{self.email}'. "
-                "The provider must register via the app before approval."
-            )
-
-        if not hasattr(existing, "provider"):
-            raise ValueError(f"'{self.email}' exists but is not a provider account.")
-
-        provider = existing.provider
-
-        # Activate and sync staff-verified details from the onboarding form.
-        # Password is intentionally not touched — it was set by the provider.
+        # Activate and sync reviewed details onto the provider account.
+        # Password is never touched — it was set by the provider at registration.
         provider.is_active = True
         provider.is_verified = True
         provider.verification_status = ProviderVerificationStatus.VERIFIED
@@ -444,10 +473,32 @@ class ProviderOnboarding(models.Model):
     def reject(self, admin_user: Staff | None, reason: str) -> None:
         if not self.can_reject():
             raise ValueError(f"Cannot reject from '{self.status}'.")
+        now = timezone.now()
         self.status = OnboardingStatus.REJECTED
         self.reviewed_by = admin_user
         self.rejection_reason = reason
-        self.rejected_at = timezone.now()
+        self.rejected_at = now
+        self.can_resubmit_after = now + timedelta(
+            days=config.ONBOARDING_REJECTION_COOLDOWN_DAYS
+        )
+        self.save()
+
+    def resubmit(self) -> None:
+        """Reset a rejected application to DRAFT so the provider can reapply."""
+        if not self.can_resubmit:
+            raise ValueError(
+                "Cannot resubmit: application is not rejected or the "
+                "resubmission cooldown has not yet expired."
+            )
+        self.status = OnboardingStatus.DRAFT
+        self.rejection_reason = ""
+        self.change_requests = ""
+        self.can_resubmit_after = None
+        self.ai_validation_status = AIValidationStatus.PENDING
+        self.ai_validation_report = {}
+        self.reviewed_by = None
+        self.reviewed_at = None
+        self.rejected_at = None
         self.save()
 
     def request_changes(self, admin_user: Staff | None, change_requests: str) -> None:
@@ -458,3 +509,97 @@ class ProviderOnboarding(models.Model):
         self.change_requests = change_requests
         self.reviewed_at = timezone.now()
         self.save()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Validation Log
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class AIValidationOutcome(models.TextChoices):
+    PASSED = "passed", "Passed"
+    FLAGGED = "flagged", "Flagged"
+    FAILED = "failed", "Failed"
+    BYPASSED = "bypassed", "Bypassed (flag off)"
+    ERROR = "error", "Error"
+
+
+class AIValidationLog(models.Model):
+    """
+    Immutable audit log of every AI validation call made during provider onboarding.
+
+    Records the inputs sent to Claude, the raw and parsed responses, latency,
+    token usage, and final outcome. Used for monitoring, debugging, and improving
+    the validation pipeline.
+
+    The onboarding FK is nullable so log records survive if an onboarding row
+    is deleted (e.g. during cleanup).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    onboarding = models.ForeignKey(
+        ProviderOnboarding,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ai_validation_logs",
+    )
+    triggered_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    # ── Inputs ────────────────────────────────────────────────────────────────
+    applicant_snapshot = models.JSONField(
+        default=dict,
+        help_text="Name, DOB, and phone captured at call time.",
+    )
+    documents_sent = models.JSONField(
+        default=list,
+        help_text="List of document labels that were included in the API call.",
+    )
+
+    # ── Response ──────────────────────────────────────────────────────────────
+    outcome = models.CharField(
+        max_length=10,
+        choices=AIValidationOutcome.choices,
+        db_index=True,
+    )
+    raw_response = models.TextField(
+        blank=True,
+        help_text="Raw text returned by Claude before JSON parsing.",
+    )
+    parsed_report = models.JSONField(
+        default=dict,
+        help_text="Parsed and status-enriched report stored on the onboarding row.",
+    )
+    error_message = models.TextField(
+        blank=True,
+        help_text="Exception or fallback reason when outcome is 'error'.",
+    )
+
+    # ── Performance ───────────────────────────────────────────────────────────
+    model_id = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Claude model identifier used for this call.",
+    )
+    latency_ms = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Wall-clock time from API call start to response, in milliseconds.",
+    )
+    input_tokens = models.IntegerField(null=True, blank=True)
+    output_tokens = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-triggered_at"]
+        verbose_name = "AI Validation Log"
+        verbose_name_plural = "AI Validation Logs"
+
+    def __str__(self) -> str:
+        applicant = self.applicant_snapshot.get("full_name", "unknown")
+        return f"[{self.outcome}] {applicant} — {self.triggered_at:%Y-%m-%d %H:%M}"
+
+    @property
+    def total_tokens(self) -> int | None:
+        if self.input_tokens is not None and self.output_tokens is not None:
+            return self.input_tokens + self.output_tokens
+        return None

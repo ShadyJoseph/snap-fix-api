@@ -367,7 +367,8 @@ class PurgeStaleDevicesTaskTest(NotificationTestCase):
             type="android",
             active=True,
         )
-        # Backdate creation to beyond the 90-day threshold.
+        # Backdate the creation timestamp beyond the 90-day threshold.
+        # date_created is auto_now_add so we must bypass it with .update().
         FCMDevice.objects.filter(pk=old_device.pk).update(
             date_created=timezone.now() - timedelta(days=91)
         )

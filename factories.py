@@ -2,7 +2,7 @@
 Unified model factories for local shell testing.
 
 Usage (Django shell):
-    python manage.py shell
+
     from factories import *
 
     # --- Quick scaffold ---
@@ -45,7 +45,7 @@ DEFAULT_PASSWORD = "testpass123"  # noqa: S105
 
 
 def make_image(name: str = "photo.png"):
-    """Return a minimal valid 1×1 PNG as a SimpleUploadedFile."""
+    """Return a minimal valid 1x1 PNG as a SimpleUploadedFile."""
     from django.core.files.uploadedfile import SimpleUploadedFile
     from PIL import Image
 
@@ -163,9 +163,9 @@ def make_provider(
     Create a Provider.
 
     Parameters:
-        active   – sets is_active (default True for shell convenience)
-        verified – sets verification_status to VERIFIED when True, PENDING otherwise
-        email    – auto-generated if omitted
+        active   - sets is_active (default True for shell convenience)
+        verified - sets verification_status to VERIFIED when True, PENDING otherwise
+        email    - auto-generated if omitted
 
     Examples:
         make_provider()
@@ -185,6 +185,7 @@ def make_provider(
         "email": email or f"provider_{uid}@test.com",
         "first_name": "Test",
         "last_name": "Provider",
+        "phone": "01012345678",
         "password": password,
         "is_active": active,
         "verification_status": vstatus,
@@ -312,6 +313,8 @@ def make_onboarding(
     )
     dob = date.today() - timedelta(days=365 * 25)
 
+    from apps.provider.choices import OnboardingStatus
+
     defaults = {
         "first_name": "Jane",
         "last_name": "Smith",
@@ -324,6 +327,7 @@ def make_onboarding(
         "nid_front": make_image("nid_front.png"),
         "nid_back": make_image("nid_back.png"),
         "police_clearance_certificate": make_image("pcc.png"),
+        "status": OnboardingStatus.PENDING,
     }
     defaults.update(kwargs)
 

@@ -1,11 +1,12 @@
 from django.contrib.auth import authenticate
 from django.contrib.gis.geos import Point
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.user.models import User
 
 from .choices import ProviderVerificationStatus
-from .models import Provider
+from .models import Provider, ProviderOnboarding
 
 
 class ProviderRegisterSerializer(serializers.ModelSerializer):
@@ -22,10 +23,12 @@ class ProviderRegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         password = validated_data.pop("password")
+        # is_active=True so the provider can authenticate for the onboarding API.
+        # verification_status=PENDING gates access to active-provider features.
         return Provider.objects.create_user(  # type: ignore
             **validated_data,
             password=password,
-            is_active=False,
+            is_active=True,
             verification_status=ProviderVerificationStatus.PENDING,
         )
 
@@ -41,15 +44,19 @@ class ProviderLoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Invalid credentials.")
 
         if not user.is_active:
-            raise serializers.ValidationError(
-                "Your account is not active yet. Please visit our office to complete verification."
-            )
+            raise serializers.ValidationError("Account is disabled.")
 
         if not hasattr(user, "provider"):
             raise serializers.ValidationError("No provider account found.")
 
+        if user.provider.verification_status == ProviderVerificationStatus.PENDING:
+            raise serializers.ValidationError(
+                "Your application is still under review. "
+                "You will be notified once it is approved."
+            )
+
         if user.provider.verification_status != ProviderVerificationStatus.VERIFIED:
-            raise serializers.ValidationError("Provider account is not verified yet.")
+            raise serializers.ValidationError("Provider account is not verified.")
 
         data["user"] = user
         return data
@@ -211,3 +218,107 @@ class ProviderLocationSerializer(serializers.Serializer):
             srid=4326,
         )
         provider.save(update_fields=["location", "updated_at"])
+
+
+# ── Self-Service Onboarding Serializers ───────────────────────────────────────
+
+
+class OnboardingPersonalInfoSerializer(serializers.ModelSerializer):
+    """
+    PATCH /onboarding/personal/
+
+    The provider fills in professional + location details.
+    Identity fields (first_name, last_name, email, phone) are read from the
+    authenticated provider account — the provider set them during registration.
+    """
+
+    first_name = serializers.CharField(read_only=True)
+    last_name = serializers.CharField(read_only=True)
+    email = serializers.EmailField(read_only=True)
+    phone = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = ProviderOnboarding
+        fields = [
+            "first_name",
+            "last_name",
+            "email",
+            "phone",
+            "date_of_birth",
+            "address",
+            "region",
+            "category",
+            "hourly_rate",
+            "years_of_experience",
+            "bio",
+        ]
+
+    def validate_date_of_birth(self, value):
+        today = timezone.now().date()
+        age = (
+            today.year
+            - value.year
+            - ((today.month, today.day) < (value.month, value.day))
+        )
+        if age < 18:
+            raise serializers.ValidationError(
+                "You must be 18 or older to register as a provider."
+            )
+        return value
+
+
+class OnboardingDocumentsSerializer(serializers.ModelSerializer):
+    """
+    PATCH /onboarding/documents/
+
+    Accepts file uploads for all required (and optional) documents.
+    Extension and size limits are enforced by the model validators.
+    Status eligibility is enforced by the view before this serializer runs.
+    """
+
+    class Meta:
+        model = ProviderOnboarding
+        fields = [
+            "nid_front",
+            "nid_back",
+            "police_clearance_certificate",
+            "professional_certificate",
+            "profile_photo",
+        ]
+
+
+class OnboardingStatusSerializer(serializers.ModelSerializer):
+    """
+    GET /onboarding/status/
+
+    Read-only view of the application state for the mobile app.
+    """
+
+    ai_report_summary = serializers.SerializerMethodField()
+    can_resubmit = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = ProviderOnboarding
+        fields = [
+            "id",
+            "status",
+            "ai_validation_status",
+            "ai_report_summary",
+            "rejection_reason",
+            "change_requests",
+            "can_resubmit",
+            "can_resubmit_after",
+            "submitted_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+    def get_ai_report_summary(self, obj):
+        report = obj.ai_validation_report
+        if not report:
+            return None
+        return {
+            "status": report.get("status"),
+            "issues": report.get("issues", []),
+            "overall_confidence": report.get("overall_confidence"),
+        }

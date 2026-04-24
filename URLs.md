@@ -57,12 +57,12 @@ payment_method and wallet_amount are set by the customer at booking time
 and can be adjusted when approving a quote.
 
 Three payment_method values:
-  "cash"   — provider collects in person (default)
-  "card"   — Stripe charges the card for the non-wallet portion
-  "wallet" — entire amount from wallet (wallet_amount == final_price)
+"cash" — provider collects in person (default)
+"card" — Stripe charges the card for the non-wallet portion
+"wallet" — entire amount from wallet (wallet_amount == final_price)
 
 wallet_amount — how much comes from the wallet (0 means no wallet use).
-card_amount   — computed: final_price − wallet_amount (read-only in API).
+card_amount — computed: final_price − wallet_amount (read-only in API).
 
 CASH
 At /complete/: payment_status → "paid" immediately (honor system).
@@ -85,10 +85,10 @@ payment_status → "paid". Provider available_balance credited.
 
 Pricing fields on the service request object:
 estimated_price — optional hint provided by the customer at creation
-quoted_price    — set by the provider via /quote/; cleared on reject
-final_price     — locked from quoted_price when customer calls
-                  /approve-quote/. The canonical charge amount for all
-                  payment calculations. Cannot be changed after this point.
+quoted_price — set by the provider via /quote/; cleared on reject
+final_price — locked from quoted_price when customer calls
+/approve-quote/. The canonical charge amount for all
+payment calculations. Cannot be changed after this point.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SHARED OBJECTS
@@ -149,27 +149,31 @@ SHARED OBJECTS
 
 <Notification> — item returned by GET /api/v1/notifications/
 {
-"id":         "uuid",
-"type":       "quote_received",
-"title":      "New Quote",
-"body":       "You received a quote of 500.00 for «Fix AC». Tap to review.",
-"data":       { "service_request_id": "uuid" },
-"is_read":    false,
+"id": "uuid",
+"type": "quote_received",
+"title": "New Quote",
+"body": "You received a quote of 500.00 for «Fix AC». Tap to review.",
+"data": { "service_request_id": "uuid" },
+"is_read": false,
 "created_at": "2026-04-11T10:00:00Z"
 }
 
 type values and their meaning:
-request_assigned      — provider picked the request
-quote_received        — provider submitted a price
-request_accepted      — provider accepted directly (no quote)
-job_started           — provider began work on-site
-job_completed         — provider marked the job done
-request_declined      — provider turned down the assignment
+request_assigned — provider picked the request
+quote_received — provider submitted a price
+request_accepted — provider accepted directly (no quote)
+job_started — provider began work on-site
+job_completed — provider marked the job done
+request_declined — provider turned down the assignment
 cancelled_by_provider — provider cancelled the job
-quote_approved        — customer approved the quoted price
-quote_rejected        — customer rejected the quoted price
+quote_approved — customer approved the quoted price
+quote_rejected — customer rejected the quoted price
 cancelled_by_customer — customer cancelled the request
-payment_settled       — job completed, provider earnings credited
+payment_settled — job completed, provider earnings credited
+onboarding_approved — provider onboarding application approved
+onboarding_rejected — provider application rejected (includes reason + resubmit date)
+onboarding_changes_required — changes requested before approval
+onboarding_resubmit_available — 30-day rejection cooldown has expired
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CUSTOMERS
@@ -317,13 +321,55 @@ PROVIDERS
 ONBOARDING FLOW
 ───────────────
 
-1. Provider registers via the app (POST /register/).
-   Account is created INACTIVE — no token is issued.
-2. Provider visits the nearest office with their documents.
-   Staff fill in the onboarding form and submit for review.
-3. Admin approves the application via the Admin Dashboard.
-   Provider account is activated and verification_status → "verified".
-4. Provider can now log in (POST /login/).
+Self-service from the mobile app — no office visit required.
+
+1. Register → POST /register/ (issues onboarding_token).
+2. Fill in personal & professional details → PATCH /onboarding/personal/
+3. Upload documents → PATCH /onboarding/documents/
+4. Submit for review → POST /onboarding/submit/
+   - Status moves to "pending".
+   - AI validates documents automatically (multi-provider pipeline: OpenAI GPT-4o-mini, Google Gemini, Groq Llama, Anthropic Claude; configured via Constance → AI_VALIDATION_PROVIDER).
+5. Poll for updates → GET /onboarding/status/
+6. Staff make the final decision via the Admin Dashboard:
+   - approved → verification_status → "verified" + FCM push
+   - rejected → 30-day cooldown before resubmit + FCM push
+   - changes_required → provider updates and resubmits + FCM push
+7. After approval, provider logs in → POST /login/.
+
+Onboarding FSM:
+draft → pending → under_review → approved
+→ rejected (cooldown → resubmit → draft)
+→ changes_required → pending (repeat)
+
+Auth note: the onboarding_token returned at registration grants access to all
+/onboarding/\* endpoints. It is scoped to providers with verification_status="pending".
+Full app access (bookings, jobs) requires logging in after approval.
+
+────────────────────────────────────────────────────────
+
+<OnboardingApplication> — returned by all onboarding endpoints
+
+{
+"id": "uuid",
+"status": "draft", // draft | pending | under_review | approved | rejected | changes_required
+"ai_validation_status": "pending", // pending | running | passed | flagged | failed
+"ai_report_summary": null, // see below when available
+"rejection_reason": "",
+"change_requests": "",
+"can_resubmit": false,
+"can_resubmit_after": null, // ISO datetime, set on rejection
+"submitted_at": "2026-04-23T10:00:00Z",
+"updated_at": "2026-04-23T10:00:00Z"
+}
+
+ai_report_summary (non-null once AI completes):
+{
+"status": "passed", // passed | flagged | failed
+"issues": [], // list of problem strings
+"overall_confidence": 0.92 // float 0-1
+}
+
+────────────────────────────────────────────────────────
 
 POST /api/v1/providers/register/ [public]
 
@@ -338,13 +384,11 @@ POST /api/v1/providers/register/ [public]
 
     Response 201:
     {
-        "message":   "Registration received. Please visit your nearest
-                      office to complete your verification.",
-        "next_step": "Visit /api/v1/core/offices/nearest/ to find the
-                      closest office to you."
+        "message":         "Registration successful. Use the onboarding_token to complete your profile...",
+        "onboarding_token": "<knox-token>",
+        "next_step":       "Submit your personal info at /api/v1/providers/onboarding/personal/"
     }
 
-    No token is issued. Account is inactive until staff approval.
     Response 400: email already registered or validation failure
 
 ────────────────────────────────────────────────────────
@@ -426,6 +470,111 @@ PATCH /api/v1/providers/me/
 
     Response 200: updated profile (same shape as GET /me/)
     Response 400: only one of latitude/longitude provided
+
+────────────────────────────────────────────────────────
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROVIDER SELF-SERVICE ONBOARDING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All endpoints require: Authorization: Token <onboarding_token>
+Permission: verification_status must be "pending" (IsAwaitingOnboarding).
+Exception: GET /onboarding/status/ accepts any authenticated provider token.
+
+────────────────────────────────────────────────────────
+
+GET /api/v1/providers/onboarding/status/
+
+    Returns the current onboarding application state.
+    Accessible with any provider token (pending or verified).
+
+    Response 200: <OnboardingApplication>
+    Response 404: no application exists yet — call PATCH /personal/ first
+
+────────────────────────────────────────────────────────
+
+PATCH /api/v1/providers/onboarding/personal/ [onboarding_token]
+
+    Creates a DRAFT application if none exists, or updates an existing
+    DRAFT / CHANGES_REQUIRED application.
+
+    Identity fields (first_name, last_name, email, phone) are locked to the
+    registered provider — they cannot be overridden in the request body.
+
+    If the previous application was REJECTED and the 30-day cooldown has
+    expired, calling this endpoint automatically resets it to DRAFT.
+
+    Request (all optional on update; date_of_birth required to submit):
+    {
+        "date_of_birth":      "1998-05-20",    // YYYY-MM-DD, must be 18+
+        "address":            "123 Cairo St",
+        "region":             1,
+        "category":           3,
+        "hourly_rate":        "150.00",
+        "years_of_experience": 5,
+        "bio":                "..."
+    }
+
+    Response 200: <OnboardingApplication>
+    Response 400: application is not in DRAFT or CHANGES_REQUIRED status,
+                  or applicant is under 18
+    Response 403: application rejected and 30-day cooldown not yet expired
+                  (body includes can_resubmit_after)
+
+────────────────────────────────────────────────────────
+
+PATCH /api/v1/providers/onboarding/documents/ [onboarding_token]
+
+    Upload or replace documents on an existing DRAFT / CHANGES_REQUIRED
+    application. Must call /personal/ first to create the application.
+    Send as multipart/form-data.
+
+    Files accepted: jpg, jpeg, png, pdf (max 5 MB each).
+
+    Request (all optional; nid_front, nid_back, police_clearance_certificate
+    are required before submitting):
+    {
+        "nid_front":                    <file>,    // required for submit
+        "nid_back":                     <file>,    // required for submit
+        "police_clearance_certificate": <file>,    // required for submit
+        "professional_certificate":     <file>,    // optional
+        "profile_photo":                <file>     // optional, jpg/jpeg/png only
+    }
+
+    Response 200: <OnboardingApplication>
+    Response 404: no application found — call /personal/ first
+    Response 400: application is not in DRAFT or CHANGES_REQUIRED status,
+                  or file too large / wrong extension
+
+────────────────────────────────────────────────────────
+
+POST /api/v1/providers/onboarding/submit/ [onboarding_token]
+
+    Finalise a DRAFT or CHANGES_REQUIRED application and submit for review.
+    Validates that all required fields are present before transitioning.
+
+    Required fields: date_of_birth, address, region, category, hourly_rate,
+                     nid_front, nid_back, police_clearance_certificate.
+
+    On success:
+      - status → "pending"
+      - Claude Vision AI validation is enqueued (async, non-blocking)
+      - Staff are notified in the Admin Dashboard
+
+    Response 200:
+    {
+        "detail":      "Application submitted successfully...",
+        "application": <OnboardingApplication>
+    }
+    Response 400: missing required fields (body lists missing_fields),
+                  or application is not in DRAFT / CHANGES_REQUIRED
+    Response 404: no application found
+
+Notification types sent to the provider (FCM push):
+onboarding_approved — "Your application has been approved!"
+onboarding_rejected — includes rejection reason + resubmit date
+onboarding_changes_required — includes list of changes to make
+onboarding_resubmit_available — daily reminder when 30-day window opens
 
 ────────────────────────────────────────────────────────
 

@@ -16,3 +16,15 @@ class NotificationType(models.TextChoices):
     QUOTE_REJECTED = "quote_rejected", "Quote Rejected"
     CANCELLED_BY_CUSTOMER = "cancelled_by_customer", "Cancelled by Customer"
     PAYMENT_SETTLED = "payment_settled", "Payment Settled"
+
+    # ── Onboarding ────────────────────────────────────────────────
+    ONBOARDING_APPROVED = "onboarding_approved", "Onboarding Approved"
+    ONBOARDING_REJECTED = "onboarding_rejected", "Onboarding Rejected"
+    ONBOARDING_CHANGES_REQUIRED = (
+        "onboarding_changes_required",
+        "Onboarding Changes Required",
+    )
+    ONBOARDING_RESUBMIT_AVAILABLE = (
+        "onboarding_resubmit_available",
+        "Can Resubmit Onboarding",
+    )

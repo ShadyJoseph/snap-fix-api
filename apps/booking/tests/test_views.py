@@ -321,7 +321,10 @@ class CustomerCancelTests(BookingTestCase):
     def test_cancel_assigned_request_notifies_provider(self, mock_push):
         self.authenticate_customer()
         sr = self.assign_to_provider(self.make_request())
-        response = self.client.post(self._cancel_url(sr), {"reason": "Changed mind"})
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._cancel_url(sr), {"reason": "Changed mind"}
+            )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CANCELLED)
@@ -411,7 +414,8 @@ class ProviderAcceptTests(BookingTestCase):
     def test_accept_assigned_request_transitions_to_confirmed(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
-        response = self.client.post(self._accept_url(sr))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._accept_url(sr))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
@@ -475,7 +479,10 @@ class ProviderDeclineTests(BookingTestCase):
     def test_decline_returns_request_to_pending_and_clears_provider(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
-        response = self.client.post(self._decline_url(sr), {"reason": "Not available"})
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._decline_url(sr), {"reason": "Not available"}
+            )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
@@ -525,7 +532,8 @@ class ProviderStartTests(BookingTestCase):
         self.authenticate_provider()
         sr = self.make_request()
         self.set_status(sr, ServiceRequestStatus.CONFIRMED, provider=self.provider)
-        response = self.client.post(self._start_url(sr))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._start_url(sr))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.IN_PROGRESS)
@@ -569,7 +577,8 @@ class ProviderCompleteTests(BookingTestCase):
         """Cash job (default): completes successfully, payment_status=paid immediately."""
         self.authenticate_provider()
         sr = self._in_progress_request()
-        response = self.client.post(self._complete_url(sr), {})
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._complete_url(sr), {})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.COMPLETED)
@@ -622,7 +631,8 @@ class ProviderCancelTests(BookingTestCase):
     def test_cancel_assigned_request(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
-        response = self.client.post(self._cancel_url(sr), {"reason": "Emergency"})
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._cancel_url(sr), {"reason": "Emergency"})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CANCELLED)
@@ -715,7 +725,8 @@ class ProviderPickRequestTests(BookingTestCase):
     def test_pick_pending_request_transitions_to_assigned(self, mock_push):
         self.authenticate_provider()
         sr = self.make_request()
-        response = self.client.post(self._pick_url(sr))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._pick_url(sr))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.ASSIGNED)
@@ -1693,7 +1704,8 @@ class ProviderQuoteViewTests(BookingTestCase):
     def test_quote_assigned_request_transitions_to_quoted(self, mock_push):
         self.authenticate_provider()
         sr = self.assign_to_provider(self.make_request())
-        response = self.client.post(self._quote_url(sr), {"price": "150.00"})
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._quote_url(sr), {"price": "150.00"})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.QUOTED)
@@ -1776,7 +1788,8 @@ class CustomerQuoteApprovalTests(BookingTestCase):
     def test_approve_quote_confirms_and_locks_price(self, mock_push):
         self.authenticate_customer()
         sr = self._quoted_request(quoted_price="150.00")
-        response = self.client.post(self._approve_url(sr))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._approve_url(sr))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.CONFIRMED)
@@ -1795,7 +1808,8 @@ class CustomerQuoteApprovalTests(BookingTestCase):
         self.provider.total_jobs = 1
         self.provider.save()
         sr = self._quoted_request()
-        response = self.client.post(self._reject_url(sr))
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self._reject_url(sr))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         sr.refresh_from_db()
         self.assertEqual(sr.status, ServiceRequestStatus.PENDING)
