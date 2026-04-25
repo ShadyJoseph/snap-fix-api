@@ -12,6 +12,7 @@ class NotificationType(models.TextChoices):
     CANCELLED_BY_PROVIDER = "cancelled_by_provider", "Cancelled by Provider"
 
     # ── Provider-facing ───────────────────────────────────────────
+    DIRECT_BOOKING_REQUEST = "direct_booking_request", "Direct Booking Request"
     QUOTE_APPROVED = "quote_approved", "Quote Approved"
     QUOTE_REJECTED = "quote_rejected", "Quote Rejected"
     CANCELLED_BY_CUSTOMER = "cancelled_by_customer", "Cancelled by Customer"

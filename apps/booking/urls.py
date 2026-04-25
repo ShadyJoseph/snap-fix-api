@@ -5,6 +5,7 @@ from .views import (
     CustomerCancelView,
     CustomerRateProviderView,
     CustomerRejectQuoteView,
+    DirectBookingView,
     HistoryDetailView,
     InitiateCardPaymentView,
     ProviderAcceptView,
@@ -30,6 +31,7 @@ urlpatterns = [
         "requests/<uuid:pk>/", ServiceRequestDetailView.as_view(), name="request-detail"
     ),
     # ── Customer actions ──────────────────────────────────────
+    path("requests/direct/", DirectBookingView.as_view(), name="request-direct"),
     path(
         "requests/<uuid:pk>/cancel/",
         CustomerCancelView.as_view(),

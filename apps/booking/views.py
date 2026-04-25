@@ -9,12 +9,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.notifications import service as notifications
+from apps.provider.choices import ProviderVerificationStatus
 
 from .choices import CancelledBy, PaymentMethod, ServiceRequestStatus
 from .models import Review, ServiceRequest, ServiceRequestPhoto
 from .serializers import (
     CustomerApproveQuoteSerializer,
     CustomerRequestDetailSerializer,
+    DirectBookingCreateSerializer,
     InitiateCardPaymentSerializer,
     ProviderQuoteSerializer,
     ProviderRequestDetailSerializer,
@@ -176,6 +178,89 @@ class CustomerCancelView(APIView):
                     sr, provider_snapshot
                 )
         return Response(ServiceRequestSerializer(sr).data)
+
+
+class DirectBookingView(APIView):
+    """
+    Customer creates a booking and directly assigns it to a specific favorite provider.
+
+    The provider must be in the customer's favorites, be verified and available,
+    offer the requested category, and not currently be handling another active job.
+
+    The request is created in PENDING then immediately moved to ASSIGNED via the
+    standard FSM assign() transition, bypassing the open pool. The provider can
+    still quote, accept directly, or decline (which returns the request to PENDING).
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        customer = get_customer_or_403(request.user)
+
+        serializer = DirectBookingCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        provider_id = serializer.validated_data.pop("provider_id")
+
+        # Verify provider exists and is in the customer's favorites.
+        try:
+            provider = customer.favorite_providers.get(pk=provider_id)
+        except ObjectDoesNotExist:
+            raise ValidationError(
+                {"provider_id": "Provider not found in your favorites."}
+            ) from None
+
+        if provider.verification_status != ProviderVerificationStatus.VERIFIED:
+            raise ValidationError({"provider_id": "Provider is not verified."})
+
+        category = serializer.validated_data.get("category")
+        if not provider.categories.filter(pk=category.pk).exists():
+            raise ValidationError(
+                {"provider_id": "Provider does not offer this service category."}
+            )
+
+        photos = request.FILES.getlist("photos")
+        if not photos:
+            raise ValidationError({"photos": "At least one photo is required."})
+        if len(photos) > 5:
+            raise ValidationError({"photos": "Maximum 5 photos allowed."})
+
+        active_statuses = [
+            ServiceRequestStatus.ASSIGNED,
+            ServiceRequestStatus.QUOTED,
+            ServiceRequestStatus.CONFIRMED,
+            ServiceRequestStatus.IN_PROGRESS,
+        ]
+
+        with transaction.atomic():
+            # Re-fetch the provider under a row lock so the availability and
+            # busy checks are race-free with concurrent direct booking requests.
+            locked_provider = (
+                customer.favorite_providers.select_for_update().get(pk=provider_id)
+            )
+            if not locked_provider.is_available:
+                raise ValidationError({"provider_id": "Provider is currently unavailable."})
+            if ServiceRequest.objects.filter(
+                provider=locked_provider, status__in=active_statuses
+            ).exists():
+                raise ValidationError(
+                    {"provider_id": "Provider is currently busy with another job."}
+                )
+            sr = serializer.save(customer=customer)
+            for photo in photos:
+                ServiceRequestPhoto.objects.create(service_request=sr, image=photo)
+            fsm_transition(lambda: sr.assign(locked_provider))
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_provider_direct_request(sr)
+
+        return Response(
+            ServiceRequestSerializer(sr, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class CustomerApproveQuoteView(APIView):

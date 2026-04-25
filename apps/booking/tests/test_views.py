@@ -2581,3 +2581,270 @@ class NotificationContentTest(BookingTestCase):
                 type=NotificationType.CANCELLED_BY_CUSTOMER
             ).exists()
         )
+
+
+# ── Direct Booking ────────────────────────────────────────────────────────────
+
+
+class DirectBookingTests(BookingTestCase):
+    """
+    POST /bookings/requests/direct/
+
+    Customer creates a booking targeted at a specific favorite provider.
+    The request is created PENDING then immediately ASSIGNED via assign().
+    All subsequent FSM transitions (quote, accept, decline, start, complete)
+    use the same existing endpoints — nothing changes there.
+    """
+
+    url = reverse("bookings:request-direct")
+
+    def setUp(self):
+        super().setUp()
+        # Provider must be in favorites to qualify for direct booking.
+        self.customer.favorite_providers.add(self.provider)
+
+    def _valid_payload(self, **overrides):
+        payload = {
+            "provider_id": str(self.provider.id),
+            "category": self.category.id,
+            "region": self.region.id,
+            "address": "123 Test St",
+            "floor_number": "3",
+            "apartment_number": "12",
+            "special_mark": "Blue door on the left",
+            "latitude": 30.0444,
+            "longitude": 31.2357,
+            "title": "Fix leaking pipe",
+            "description": "Pipe under sink is leaking",
+            "preferred_date": "2026-06-01",
+            "preferred_time": "10:00:00",
+        }
+        payload.update(overrides)
+        return payload
+
+    def _post_with_photo(self, **overrides):
+        return self.client.post(
+            self.url, {**self._valid_payload(**overrides), "photos": make_image()}
+        )
+
+    # ── Happy path ────────────────────────────────────────────
+
+    @patch(TASK_PATH)
+    def test_create_success_returns_assigned(self, _):
+        self.authenticate_customer()
+        response = self._post_with_photo()
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.ASSIGNED)
+
+    @patch(TASK_PATH)
+    def test_create_assigns_correct_provider(self, _):
+        self.authenticate_customer()
+        response = self._post_with_photo()
+        sr = ServiceRequest.objects.get(id=response.data["id"])
+        self.assertEqual(sr.provider, self.provider)
+
+    @patch(TASK_PATH)
+    def test_create_stores_photos(self, _):
+        self.authenticate_customer()
+        response = self._post_with_photo()
+        sr = ServiceRequest.objects.get(id=response.data["id"])
+        self.assertEqual(sr.photos.count(), 1)
+
+    @patch(TASK_PATH)
+    def test_create_increments_provider_total_jobs(self, _):
+        self.authenticate_customer()
+        before = self.provider.total_jobs
+        self._post_with_photo()
+        self.provider.refresh_from_db()
+        self.assertEqual(self.provider.total_jobs, before + 1)
+
+    @patch(TASK_PATH)
+    def test_create_fires_direct_booking_notification_to_provider(self, _):
+        self.authenticate_customer()
+        response = self._post_with_photo()
+        sr_id = str(response.data["id"])
+        notif = Notification.objects.get(
+            recipient=self.provider,
+            type=NotificationType.DIRECT_BOOKING_REQUEST,
+        )
+        self.assertEqual(notif.data["service_request_id"], sr_id)
+
+    # ── Full lifecycle: quote path ─────────────────────────────
+
+    @patch(TASK_PATH)
+    def test_lifecycle_quote_approve_start_complete(self, _):
+        """Direct booking → provider quotes → customer approves → start → complete."""
+        # 1. Customer creates direct booking — lands on ASSIGNED
+        self.authenticate_customer()
+        response = self._post_with_photo()
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        sr_id = response.data["id"]
+        self.assertEqual(response.data["status"], ServiceRequestStatus.ASSIGNED)
+
+        # 2. Provider submits a price quote
+        self.authenticate_provider()
+        response = self.client.post(
+            reverse("bookings:request-quote", args=[sr_id]), {"price": "250.00"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.QUOTED)
+        self.assertEqual(str(response.data["quoted_price"]), "250.00")
+
+        # 3. Customer approves the quote — final_price locked
+        self.authenticate_customer()
+        response = self.client.post(
+            reverse("bookings:request-approve-quote", args=[sr_id])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.CONFIRMED)
+        self.assertEqual(str(response.data["final_price"]), "250.00")
+
+        # 4. Provider starts work
+        self.authenticate_provider()
+        response = self.client.post(reverse("bookings:request-start", args=[sr_id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.IN_PROGRESS)
+
+        # 5. Provider completes — payment settled (cash default)
+        response = self.client.post(reverse("bookings:request-complete", args=[sr_id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.COMPLETED)
+        self.assertEqual(response.data["payment_status"], PaymentStatus.PAID)
+
+    @patch(TASK_PATH)
+    def test_lifecycle_customer_rejects_quote_returns_to_pending(self, _):
+        """Customer rejects the provider's quote — request returns to open pool."""
+        self.authenticate_customer()
+        sr_id = self._post_with_photo().data["id"]
+
+        self.authenticate_provider()
+        self.client.post(
+            reverse("bookings:request-quote", args=[sr_id]), {"price": "300.00"}
+        )
+
+        self.authenticate_customer()
+        response = self.client.post(
+            reverse("bookings:request-reject-quote", args=[sr_id])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.PENDING)
+        sr = ServiceRequest.objects.get(pk=sr_id)
+        self.assertIsNone(sr.provider_id)
+
+    @patch(TASK_PATH)
+    def test_lifecycle_provider_accepts_directly_skip_quote(self, _):
+        """Provider skips quote and accepts directly (assigned → confirmed)."""
+        self.authenticate_customer()
+        sr_id = self._post_with_photo().data["id"]
+
+        self.authenticate_provider()
+        response = self.client.post(reverse("bookings:request-accept", args=[sr_id]))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.CONFIRMED)
+
+    @patch(TASK_PATH)
+    def test_lifecycle_provider_declines_returns_to_pending(self, _):
+        """Provider declines a direct booking — request returns to the open pool."""
+        self.authenticate_customer()
+        sr_id = self._post_with_photo().data["id"]
+
+        self.authenticate_provider()
+        response = self.client.post(
+            reverse("bookings:request-decline", args=[sr_id]), {"reason": "Busy"}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], ServiceRequestStatus.PENDING)
+        sr = ServiceRequest.objects.get(pk=sr_id)
+        self.assertIsNone(sr.provider_id)
+
+    # ── Validation failures ───────────────────────────────────
+
+    def test_unauthenticated_returns_401(self):
+        response = self.client.post(self.url, {})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_provider_token_returns_403(self):
+        self.authenticate_provider()
+        response = self._post_with_photo()
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_missing_provider_id_returns_400(self):
+        self.authenticate_customer()
+        payload = self._valid_payload()
+        del payload["provider_id"]
+        response = self.client.post(self.url, {**payload, "photos": make_image()})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("provider_id", response.data)
+
+    @patch(TASK_PATH)
+    def test_provider_not_in_favorites_returns_400(self, _):
+        self.authenticate_customer()
+        stranger = make_provider(email="stranger@test.com")
+        stranger.categories.add(self.category)
+        response = self.client.post(
+            self.url,
+            {**self._valid_payload(provider_id=str(stranger.id)), "photos": make_image()},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("provider_id", response.data)
+
+    @patch(TASK_PATH)
+    def test_provider_not_verified_returns_400(self, _):
+        self.authenticate_customer()
+        unverified = make_provider(email="unverified@test.com", verified=False)
+        unverified.categories.add(self.category)
+        self.customer.favorite_providers.add(unverified)
+        response = self.client.post(
+            self.url,
+            {**self._valid_payload(provider_id=str(unverified.id)), "photos": make_image()},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("provider_id", response.data)
+
+    @patch(TASK_PATH)
+    def test_provider_unavailable_returns_400(self, _):
+        self.authenticate_customer()
+        self.provider.is_available = False
+        self.provider.save()
+        response = self._post_with_photo()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("provider_id", response.data)
+
+    @patch(TASK_PATH)
+    def test_provider_wrong_category_returns_400(self, _):
+        self.authenticate_customer()
+        other_category = make_category()
+        response = self.client.post(
+            self.url,
+            {**self._valid_payload(category=other_category.id), "photos": make_image()},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("provider_id", response.data)
+
+    @patch(TASK_PATH)
+    def test_provider_busy_returns_400(self, _):
+        self.authenticate_customer()
+        sr = self.make_request()
+        sr.provider = self.provider
+        sr.status = ServiceRequestStatus.ASSIGNED
+        sr.save()
+        response = self._post_with_photo()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("provider_id", response.data)
+
+    @patch(TASK_PATH)
+    def test_missing_photos_returns_400(self, _):
+        self.authenticate_customer()
+        response = self.client.post(self.url, self._valid_payload())
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photos", response.data)
+
+    @patch(TASK_PATH)
+    def test_too_many_photos_returns_400(self, _):
+        self.authenticate_customer()
+        photos = [make_image(f"p{i}.png") for i in range(6)]
+        response = self.client.post(
+            self.url, {**self._valid_payload(), "photos": photos}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("photos", response.data)

@@ -193,6 +193,17 @@ def notify_provider_cancelled_by_customer(sr, provider):
     )
 
 
+def notify_provider_direct_request(sr):
+    """pending → assigned via direct booking (customer personally chose this provider)."""
+    notify(
+        recipient=sr.provider,
+        notification_type=NotificationType.DIRECT_BOOKING_REQUEST,
+        title="Direct Booking Request",
+        body=f"{sr.customer.get_full_name()} personally requested you for «{sr.title}».",
+        data={"service_request_id": str(sr.id)},
+    )
+
+
 def notify_provider_payment_settled(sr):
     """in_progress → completed."""
     notify(

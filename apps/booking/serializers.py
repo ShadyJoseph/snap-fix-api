@@ -166,6 +166,25 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
         return rep
 
 
+# ── Direct booking create ─────────────────────────────────────────────────────
+
+
+class DirectBookingCreateSerializer(ServiceRequestCreateSerializer):
+    """
+    Extends the standard create serializer with a required provider_id.
+
+    provider_id is write-only and must be popped from validated_data before
+    serializer.save() so it is not forwarded to Model.objects.create().
+    All provider validation (favorites, verified, available, category) is
+    performed in the view, which has access to the authenticated customer.
+    """
+
+    provider_id = serializers.UUIDField(write_only=True)
+
+    class Meta(ServiceRequestCreateSerializer.Meta):
+        fields = ServiceRequestCreateSerializer.Meta.fields + ["provider_id"]
+
+
 # ── Full read serializer ──────────────────────────────────────────────────────
 
 

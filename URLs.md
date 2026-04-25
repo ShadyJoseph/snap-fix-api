@@ -17,6 +17,10 @@ pending → assigned → quoted → confirmed → in_progress → completed
 Skip-quote path (provider accepts without negotiating):
 pending → assigned → confirmed → in_progress → completed
 
+Direct booking path (customer targets a specific favorite provider):
+pending → assigned  (happens atomically at creation time)
+… then follows the normal flow from "assigned" onwards (quote / accept / decline).
+
 Rejection / decline paths:
 quoted → pending (customer rejects quote — back to open pool)
 assigned → pending (provider declines — back to open pool)
@@ -28,7 +32,8 @@ Status Who triggers
 ───────────────────────────────────────────────────────
 pending Customer creates request
 assigned Admin assigns a provider OR
-Provider self-picks from the open pool
+Provider self-picks from the open pool OR
+Customer creates a direct booking (favorites)
 quoted Provider submits a price quote
 confirmed Customer approves the quote OR
 Provider accepts directly (skip-quote path)
@@ -159,7 +164,8 @@ SHARED OBJECTS
 }
 
 type values and their meaning:
-request_assigned — provider picked the request
+request_assigned — provider picked the request (from open pool or admin assign)
+direct_booking_request — customer personally requested this provider (direct booking)
 quote_received — provider submitted a price
 request_accepted — provider accepted directly (no quote)
 job_started — provider began work on-site
@@ -802,6 +808,60 @@ GET /api/v1/bookings/requests/<id>/ [customer token]
 
     Response 200: <ServiceRequest>
     Response 404: not found or not owned by caller
+
+────────────────────────────────────────────────────────
+
+POST /api/v1/bookings/requests/direct/ [customer token]
+
+    Creates a booking and directly assigns it to a specific provider from
+    the customer's favorites. The request is created in "pending" and
+    immediately moved to "assigned" in a single atomic transaction.
+
+    From "assigned" onwards the full standard flow applies: the provider
+    can quote, accept directly, or decline (which returns the request to
+    "pending" and the open pool).
+
+    Must be multipart/form-data (photos required). Customer is taken from
+    the auth token.
+
+    Provider guards (all must pass):
+      • provider_id must be in the customer's favorites
+      • provider verification_status must be "verified"
+      • provider is_available must be true
+      • provider must offer the requested category
+      • provider must have no active job
+        (assigned / quoted / confirmed / in_progress)
+
+    Request (* = required):
+    {
+        "provider_id":      "<uuid>",                            *
+        "category":         1,                                   *
+        "region":           1,                                   *
+        "address":          "12 Tahrir St",                      *
+        "floor_number":     "3",                                 *
+        "apartment_number": "12",                                *
+        "special_mark":     "Blue door on the left",             *
+        "latitude":         30.044420,                           *
+        "longitude":        31.235712,                           *
+        "title":            "Leaking pipe",                      *
+        "description":      "Details...",                        *
+        "preferred_date":   "2025-08-01",                        *  (YYYY-MM-DD)
+        "preferred_time":   "10:00:00",                          *  (HH:MM:SS)
+        "photos":           <file>, <file>, ...                  *  (1-5 images, jpg/png)
+        "is_urgent":        false,
+        "estimated_price":  "150.00",
+        "payment_method":   "cash",
+        "wallet_amount":    "0.00"
+    }
+
+    Response 201: <ServiceRequest>  (status: "assigned", provider populated)
+    Response 400: provider_id fails any guard, missing required fields,
+                  no photos, or more than 5 photos attached
+    Response 403: provider token used
+
+    Notification fired:
+      direct_booking_request → provider
+      ("X personally requested you for «title»")
 
 ────────────────────────────────────────────────────────
 

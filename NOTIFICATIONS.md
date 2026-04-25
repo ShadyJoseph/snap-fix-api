@@ -51,6 +51,7 @@ The DB write is the source of truth. The FCM push is best-effort delivery to the
 | `type`                  | Recipient | Triggered when                                           | FSM transition            | Trigger path                                                |
 | ----------------------- | --------- | -------------------------------------------------------- | ------------------------- | ----------------------------------------------------------- |
 | `request_assigned`              | Customer  | Provider picks from pool **or** admin assigns            | `pending → assigned`              | View + Admin `save_model`                                   |
+| `direct_booking_request`        | Provider  | Customer creates a direct booking targeting this provider | `pending → assigned` (at creation) | View (`DirectBookingView`)                                 |
 | `quote_received`                | Customer  | Provider submits a price                                 | `assigned → quoted`               | View                                                        |
 | `request_accepted`              | Customer  | Provider accepts directly (no quote)                     | `assigned → confirmed`            | View                                                        |
 | `job_started`                   | Customer  | Provider begins work                                     | `confirmed → in_progress`         | View                                                        |
@@ -300,6 +301,7 @@ Use `data.type` from the push payload directly — it is identical to the `type`
 | `type`                  | Navigate to                                     |
 | ----------------------- | ----------------------------------------------- |
 | `request_assigned`      | Request detail screen                           |
+| `direct_booking_request` | Incoming jobs screen → request detail (provider was personally chosen) |
 | `quote_received`        | Request detail → Quote review section           |
 | `request_accepted`      | Request detail screen                           |
 | `job_started`           | Request detail → In-progress view               |
