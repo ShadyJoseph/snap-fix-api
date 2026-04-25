@@ -1020,7 +1020,9 @@ class AIValidationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Onboarding")
     def onboarding_link(self, obj: AIValidationLog) -> str:
         if not obj.onboarding_id:
-            return format_html('<span style="color:#999;font-style:italic">Deleted</span>')
+            return format_html(
+                '<span style="color:#999;font-style:italic">Deleted</span>'
+            )
         url = reverse(
             "admin:provider_provideronboarding_change", args=[obj.onboarding_id]
         )

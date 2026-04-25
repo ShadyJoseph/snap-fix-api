@@ -239,11 +239,13 @@ class DirectBookingView(APIView):
         with transaction.atomic():
             # Re-fetch the provider under a row lock so the availability and
             # busy checks are race-free with concurrent direct booking requests.
-            locked_provider = (
-                customer.favorite_providers.select_for_update().get(pk=provider_id)
+            locked_provider = customer.favorite_providers.select_for_update().get(
+                pk=provider_id
             )
             if not locked_provider.is_available:
-                raise ValidationError({"provider_id": "Provider is currently unavailable."})
+                raise ValidationError(
+                    {"provider_id": "Provider is currently unavailable."}
+                )
             if ServiceRequest.objects.filter(
                 provider=locked_provider, status__in=active_statuses
             ).exists():

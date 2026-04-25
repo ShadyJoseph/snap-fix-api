@@ -2,6 +2,7 @@ import uuid
 
 from django.contrib.gis.db import models
 from django.contrib.gis.geos import Point
+from django.core.validators import RegexValidator
 
 
 class Category(models.Model):
@@ -73,8 +74,8 @@ class Region(models.Model):
     def longitude(self):
         return self.location.x if self.location else None
 
-    @classmethod
-    def set_location(cls, lat, lng):
+    @staticmethod
+    def set_location(lat, lng):
         """Helper to create a Point from lat/lng."""
         return Point(x=lng, y=lat, srid=4326)
 
@@ -105,6 +106,12 @@ class Office(models.Model):
     working_hours = models.CharField(
         max_length=200,
         help_text="e.g. 'Sun-Thu 9:00 AM - 5:00 PM'",
+        validators=[
+            RegexValidator(
+                regex=r"\d{1,2}:\d{2}",
+                message="Working hours must include a time range, e.g. 'Sun-Thu 9:00 AM - 5:00 PM'",
+            )
+        ],
     )
     is_active = models.BooleanField(default=True)
 

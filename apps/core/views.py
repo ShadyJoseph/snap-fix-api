@@ -72,9 +72,15 @@ class NearestOfficeView(APIView):
             raise ValidationError("Both 'lat' and 'lng' query params are required.")
 
         try:
-            user_location = Point(float(lng), float(lat), srid=4326)
+            lat = float(lat)
+            lng = float(lng)
         except (TypeError, ValueError) as e:
             raise ValidationError("'lat' and 'lng' must be valid numbers.") from e
+
+        if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+            raise ValidationError("Coordinates out of valid range.")
+
+        user_location = Point(lng, lat, srid=4326)
 
         office = (
             Office.objects.filter(is_active=True, location__isnull=False)

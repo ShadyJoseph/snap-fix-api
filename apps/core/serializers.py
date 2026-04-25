@@ -18,10 +18,14 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class RegionSerializer(serializers.ModelSerializer):
-    latitude = serializers.FloatField(source="location.y", read_only=True, default=None)
-    longitude = serializers.FloatField(
-        source="location.x", read_only=True, default=None
-    )
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
+
+    def get_latitude(self, obj):
+        return obj.latitude
+
+    def get_longitude(self, obj):
+        return obj.longitude
 
     class Meta:
         model = Region
@@ -39,10 +43,14 @@ class RegionSerializer(serializers.ModelSerializer):
 
 class OfficeListSerializer(serializers.ModelSerializer):
     region_name = serializers.CharField(source="region.name", read_only=True)
-    latitude = serializers.FloatField(source="location.y", read_only=True, default=None)
-    longitude = serializers.FloatField(
-        source="location.x", read_only=True, default=None
-    )
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
+
+    def get_latitude(self, obj):
+        return obj.latitude
+
+    def get_longitude(self, obj):
+        return obj.longitude
 
     class Meta:
         model = Office
@@ -60,10 +68,14 @@ class OfficeListSerializer(serializers.ModelSerializer):
 
 class OfficeDetailSerializer(serializers.ModelSerializer):
     region = RegionSerializer(read_only=True)
-    latitude = serializers.FloatField(source="location.y", read_only=True, default=None)
-    longitude = serializers.FloatField(
-        source="location.x", read_only=True, default=None
-    )
+    latitude = serializers.SerializerMethodField()
+    longitude = serializers.SerializerMethodField()
+
+    def get_latitude(self, obj):
+        return obj.latitude
+
+    def get_longitude(self, obj):
+        return obj.longitude
 
     class Meta:
         model = Office

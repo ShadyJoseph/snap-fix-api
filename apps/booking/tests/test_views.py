@@ -2783,7 +2783,10 @@ class DirectBookingTests(BookingTestCase):
         stranger.categories.add(self.category)
         response = self.client.post(
             self.url,
-            {**self._valid_payload(provider_id=str(stranger.id)), "photos": make_image()},
+            {
+                **self._valid_payload(provider_id=str(stranger.id)),
+                "photos": make_image(),
+            },
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("provider_id", response.data)
@@ -2796,7 +2799,10 @@ class DirectBookingTests(BookingTestCase):
         self.customer.favorite_providers.add(unverified)
         response = self.client.post(
             self.url,
-            {**self._valid_payload(provider_id=str(unverified.id)), "photos": make_image()},
+            {
+                **self._valid_payload(provider_id=str(unverified.id)),
+                "photos": make_image(),
+            },
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("provider_id", response.data)
