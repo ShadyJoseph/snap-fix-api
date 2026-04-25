@@ -1,9 +1,13 @@
 import logging
+from datetime import timedelta
 
 from celery import shared_task
+from django.utils import timezone
 from fcm_django.models import FCMDevice
 from firebase_admin.messaging import Message
 from firebase_admin.messaging import Notification as FCMNotification
+
+from apps.notifications.models import Notification
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +55,13 @@ def send_push_notification(self, user_id: str, title: str, body: str, data: dict
 @shared_task
 def purge_stale_fcm_devices():
     """
-    Deactivate FCM device records that have not been updated in 90+ days.
+    Deactivate FCM device records that have not been re-registered in 90+ days.
     Runs daily. FCM_DJANGO_SETTINGS DELETE_INACTIVE_DEVICES handles removal
     on send failure; this task handles devices that go silent without errors.
+
+    date_created is refreshed on every re-registration (RegisterDeviceView uses
+    delete+recreate), so it reliably reflects the last time the token was active.
     """
-    from datetime import timedelta
-
-    from django.utils import timezone
-
     cutoff = timezone.now() - timedelta(days=90)
     updated = FCMDevice.objects.filter(active=True, date_created__lt=cutoff).update(
         active=False
@@ -72,12 +75,6 @@ def purge_old_notifications():
     Delete read Notification rows older than 90 days.
     Runs weekly to keep the inbox table lean.
     """
-    from datetime import timedelta
-
-    from django.utils import timezone
-
-    from apps.notifications.models import Notification
-
     cutoff = timezone.now() - timedelta(days=90)
     deleted, _ = Notification.objects.filter(
         is_read=True, created_at__lt=cutoff

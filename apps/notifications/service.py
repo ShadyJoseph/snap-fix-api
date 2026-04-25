@@ -75,6 +75,11 @@ def notify(
 
 def notify_customer_request_assigned(sr):
     """pending → assigned."""
+    if not sr.provider:
+        logger.warning(
+            "notify_customer_request_assigned: sr.provider is None (sr=%s)", sr.pk
+        )
+        return
     notify(
         recipient=sr.customer,
         notification_type=NotificationType.REQUEST_ASSIGNED,
@@ -97,6 +102,11 @@ def notify_customer_quote_received(sr):
 
 def notify_customer_request_accepted(sr):
     """assigned → confirmed (provider accepted directly, no quote)."""
+    if not sr.provider:
+        logger.warning(
+            "notify_customer_request_accepted: sr.provider is None (sr=%s)", sr.pk
+        )
+        return
     notify(
         recipient=sr.customer,
         notification_type=NotificationType.REQUEST_ACCEPTED,
@@ -108,6 +118,11 @@ def notify_customer_request_accepted(sr):
 
 def notify_customer_job_started(sr):
     """confirmed → in_progress."""
+    if not sr.provider:
+        logger.warning(
+            "notify_customer_job_started: sr.provider is None (sr=%s)", sr.pk
+        )
+        return
     notify(
         recipient=sr.customer,
         notification_type=NotificationType.JOB_STARTED,
@@ -250,7 +265,7 @@ def notify_provider_onboarding_rejected(onboarding):
         ),
         data={
             "onboarding_id": str(onboarding.pk),
-            "rejection_reason": onboarding.rejection_reason,
+            "rejection_reason": onboarding.rejection_reason or "",
             "can_resubmit_after": resubmit_date,
         },
     )

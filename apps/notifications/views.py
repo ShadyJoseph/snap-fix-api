@@ -1,5 +1,6 @@
 import re
 
+from django.db import IntegrityError, transaction
 from django.http import Http404
 from fcm_django.models import FCMDevice
 from rest_framework import generics, permissions, status
@@ -108,34 +109,51 @@ class RegisterDeviceView(APIView):
     def post(self, request):
         serializer = RegisterDeviceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         token = serializer.validated_data["registration_id"]
 
-        # Enforce per-user device cap, excluding the token being upserted.
-        existing_count = (
-            FCMDevice.objects.filter(user=request.user, active=True)
-            .exclude(registration_id=token)
-            .count()
-        )
-        if existing_count >= MAX_DEVICES_PER_USER:
-            return Response(
-                {
-                    "detail": f"Maximum {MAX_DEVICES_PER_USER} active devices allowed. Unregister an existing device first."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+        with transaction.atomic():
+            # Lock this user's device rows so concurrent registrations serialise
+            # through the cap check and don't race past it.
+            user_devices = FCMDevice.objects.select_for_update().filter(
+                user=request.user
             )
+            already_registered = user_devices.filter(
+                registration_id=token, active=True
+            ).exists()
 
-        device, created = FCMDevice.objects.update_or_create(
-            registration_id=token,
-            defaults={
-                "user": request.user,
-                "type": serializer.validated_data["type"],
-                "active": True,
-            },
-        )
+            if not already_registered:
+                if user_devices.filter(active=True).count() >= MAX_DEVICES_PER_USER:
+                    return Response(
+                        {
+                            "detail": f"Maximum {MAX_DEVICES_PER_USER} active devices allowed. "
+                            "Unregister an existing device first."
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            # Delete then recreate so date_created reflects the latest registration.
+            # This keeps the purge_stale_fcm_devices task accurate (it uses date_created).
+            # Scoped to this user to avoid touching another user's token.
+            user_devices.filter(registration_id=token).delete()
+            try:
+                FCMDevice.objects.create(
+                    user=request.user,
+                    registration_id=token,
+                    type=serializer.validated_data["type"],
+                    active=True,
+                )
+            except IntegrityError:
+                # Another user already owns this token — refuse the reassignment.
+                return Response(
+                    {"detail": "Token is already registered to another account."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         return Response(
-            {"registered": True, "created": created},
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+            {"registered": True, "created": not already_registered},
+            status=status.HTTP_201_CREATED
+            if not already_registered
+            else status.HTTP_200_OK,
         )
 
 
