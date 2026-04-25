@@ -6,18 +6,23 @@ from apps.user.models import User
 class Staff(User):
     """Staff model for managing admin dashboard"""
 
-    # Permissions
+    PERM_USERS = "users"
+    PERM_SERVICES = "services"
+    PERM_PAYMENTS = "payments"
+    PERM_ANALYTICS = "analytics"
+
+    # Permissions — default False (principle of least privilege)
     can_manage_users = models.BooleanField(
-        default=True, help_text="Can manage (create, update, delete) users"
+        default=False, help_text="Can manage (create, update, delete) users"
     )
     can_manage_services = models.BooleanField(
-        default=True, help_text="Can manage service categories and listings"
+        default=False, help_text="Can manage service categories and listings"
     )
     can_manage_payments = models.BooleanField(
-        default=True, help_text="Can view and manage payment transactions"
+        default=False, help_text="Can view and manage payment transactions"
     )
     can_view_analytics = models.BooleanField(
-        default=True, help_text="Can view platform analytics and reports"
+        default=False, help_text="Can view platform analytics and reports"
     )
 
     class Meta:
@@ -29,12 +34,12 @@ class Staff(User):
         return f"Staff: {self.get_full_name()}"
 
     def has_permission(self, permission_type):
-        """Check if staff has specific permission"""
+        """Check if staff has specific permission. Use Staff.PERM_* constants."""
         permission_map = {
-            "users": self.can_manage_users,
-            "services": self.can_manage_services,
-            "payments": self.can_manage_payments,
-            "analytics": self.can_view_analytics,
+            self.PERM_USERS: self.can_manage_users,
+            self.PERM_SERVICES: self.can_manage_services,
+            self.PERM_PAYMENTS: self.can_manage_payments,
+            self.PERM_ANALYTICS: self.can_view_analytics,
         }
         return permission_map.get(permission_type, False)
 

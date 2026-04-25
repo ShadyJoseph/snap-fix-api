@@ -65,6 +65,8 @@ class User(AbstractBaseUser, PermissionsMixin):
             return "customer"
         elif hasattr(self, "provider"):
             return "provider"
+        elif hasattr(self, "staff"):
+            return "staff"
         elif hasattr(self, "admin_profile"):
             return "admin"
         return "user"

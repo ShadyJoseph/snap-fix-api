@@ -1,6 +1,7 @@
 from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
-from django.utils.html import format_html, mark_safe
+from django.utils.html import format_html
 
 from .models import Staff
 
@@ -27,11 +28,27 @@ class StaffChangeForm(UserChangeForm):
 
     class Meta(UserChangeForm.Meta):
         model = Staff
-        fields = "__all__"
+        fields = (
+            "email",
+            "password",
+            "first_name",
+            "last_name",
+            "phone",
+            "profile_picture",
+            "can_manage_users",
+            "can_manage_services",
+            "can_manage_payments",
+            "can_view_analytics",
+            "is_active",
+            "is_staff",
+            "is_superuser",
+            "groups",
+            "user_permissions",
+        )
 
 
 @admin.register(Staff)
-class StaffAdmin(admin.ModelAdmin):
+class StaffAdmin(UserAdmin):
     form = StaffChangeForm
     add_form = StaffCreationForm
 
@@ -53,6 +70,8 @@ class StaffAdmin(admin.ModelAdmin):
     )
     search_fields = ("email", "first_name", "last_name", "phone")
     readonly_fields = ("is_staff", "date_joined", "last_login", "updated_at")
+    ordering = ("-date_joined",)
+    filter_horizontal = ()
 
     fieldsets = (
         (
@@ -60,6 +79,7 @@ class StaffAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "email",
+                    "password",
                     "first_name",
                     "last_name",
                     "phone",
@@ -81,7 +101,7 @@ class StaffAdmin(admin.ModelAdmin):
         (
             "Status",
             {
-                "fields": ("is_active", "is_staff", "is_superuser"),
+                "fields": ("is_active", "is_staff"),
                 "description": "is_staff is set automatically and cannot be changed manually.",
             },
         ),
@@ -122,20 +142,15 @@ class StaffAdmin(admin.ModelAdmin):
         ),
     )
 
-    def get_form(self, request, obj=None, **kwargs):
-        """Use StaffCreationForm on add, StaffChangeForm on change."""
-        if obj is None:
-            kwargs["form"] = self.add_form
-        return super().get_form(request, obj, **kwargs)
-
     def get_fieldsets(self, request, obj=None):
         if obj is None:
             return self.add_fieldsets
-        return self.fieldsets
-
-    def save_model(self, request, obj, form, change):
-        obj.is_staff = True
-        super().save_model(request, obj, form, change)
+        fieldsets = list(self.fieldsets)
+        if request.user.is_superuser:
+            fieldsets = fieldsets + [
+                ("Superuser", {"fields": ("is_superuser",), "classes": ("collapse",)})
+            ]
+        return fieldsets
 
     @admin.display(description="Permissions")
     def permissions_summary(self, obj):
@@ -150,9 +165,7 @@ class StaffAdmin(admin.ModelAdmin):
             permissions.append("Analytics")
 
         if not permissions:
-            return mark_safe(  # noqa: S308
-                '<span style="color:gray">No permissions</span>'
-            )
+            return format_html('<span style="color:gray">No permissions</span>')
 
         return format_html(
             '<span style="color:green">{}</span>',

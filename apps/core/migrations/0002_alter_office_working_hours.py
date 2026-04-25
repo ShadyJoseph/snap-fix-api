@@ -5,15 +5,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0001_initial'),
+        ("core", "0001_initial"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='office',
-            name='working_hours',
-            field=models.CharField(help_text="e.g. 'Sun-Thu 9:00 AM - 5:00 PM'", max_length=200, validators=[django.core.validators.RegexValidator(message="Working hours must include a time range, e.g. 'Sun-Thu 9:00 AM - 5:00 PM'", regex='\\d{1,2}:\\d{2}')]),
+            model_name="office",
+            name="working_hours",
+            field=models.CharField(
+                help_text="e.g. 'Sun-Thu 9:00 AM - 5:00 PM'",
+                max_length=200,
+                validators=[
+                    django.core.validators.RegexValidator(
+                        message="Working hours must include a time range, e.g. 'Sun-Thu 9:00 AM - 5:00 PM'",
+                        regex="\\d{1,2}:\\d{2}",
+                    )
+                ],
+            ),
         ),
     ]

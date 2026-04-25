@@ -4,15 +4,35 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('notifications', '0002_alter_notification_type'),
+        ("notifications", "0002_alter_notification_type"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='notification',
-            name='type',
-            field=models.CharField(choices=[('request_assigned', 'Request Assigned'), ('quote_received', 'Quote Received'), ('request_accepted', 'Request Accepted'), ('job_started', 'Job Started'), ('job_completed', 'Job Completed'), ('request_declined', 'Request Declined'), ('cancelled_by_provider', 'Cancelled by Provider'), ('direct_booking_request', 'Direct Booking Request'), ('quote_approved', 'Quote Approved'), ('quote_rejected', 'Quote Rejected'), ('cancelled_by_customer', 'Cancelled by Customer'), ('payment_settled', 'Payment Settled'), ('onboarding_approved', 'Onboarding Approved'), ('onboarding_rejected', 'Onboarding Rejected'), ('onboarding_changes_required', 'Onboarding Changes Required'), ('onboarding_resubmit_available', 'Can Resubmit Onboarding')], db_index=True, max_length=30),
+            model_name="notification",
+            name="type",
+            field=models.CharField(
+                choices=[
+                    ("request_assigned", "Request Assigned"),
+                    ("quote_received", "Quote Received"),
+                    ("request_accepted", "Request Accepted"),
+                    ("job_started", "Job Started"),
+                    ("job_completed", "Job Completed"),
+                    ("request_declined", "Request Declined"),
+                    ("cancelled_by_provider", "Cancelled by Provider"),
+                    ("direct_booking_request", "Direct Booking Request"),
+                    ("quote_approved", "Quote Approved"),
+                    ("quote_rejected", "Quote Rejected"),
+                    ("cancelled_by_customer", "Cancelled by Customer"),
+                    ("payment_settled", "Payment Settled"),
+                    ("onboarding_approved", "Onboarding Approved"),
+                    ("onboarding_rejected", "Onboarding Rejected"),
+                    ("onboarding_changes_required", "Onboarding Changes Required"),
+                    ("onboarding_resubmit_available", "Can Resubmit Onboarding"),
+                ],
+                db_index=True,
+                max_length=30,
+            ),
         ),
     ]
