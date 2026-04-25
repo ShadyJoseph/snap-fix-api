@@ -60,13 +60,15 @@ class User(AbstractBaseUser, PermissionsMixin):
         return f"{self.first_name} {self.last_name}"
 
     def get_user_type(self):
-        """Return the actual user type"""
+        """Return the actual user type.
+
+        Relies on callers (e.g. admin list views) using select_related so the
+        reverse OneToOne lookups are already cached and don't fire extra queries.
+        """
         if hasattr(self, "customer"):
             return "customer"
-        elif hasattr(self, "provider"):
+        if hasattr(self, "provider"):
             return "provider"
-        elif hasattr(self, "staff"):
+        if hasattr(self, "staff"):
             return "staff"
-        elif hasattr(self, "admin_profile"):
-            return "admin"
         return "user"

@@ -36,7 +36,14 @@ class UserAdmin(BaseUserAdmin):
         (
             "Permissions",
             {
-                "fields": ("is_active", "is_staff", "is_superuser", "is_verified"),
+                "fields": (
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                    "is_verified",
+                    "groups",
+                    "user_permissions",
+                ),
             },
         ),
         ("Important dates", {"fields": ("last_login", "date_joined")}),
@@ -62,15 +69,20 @@ class UserAdmin(BaseUserAdmin):
         # Users are created through Customer, Provider, or Staff — never directly
         return False
 
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("customer", "provider", "staff")
+        )
+
     def get_readonly_fields(self, request, obj=None):
-        readonly = list(super().get_readonly_fields(request, obj))
-        if "location" not in readonly:
-            readonly.append("location")
+        readonly = set(super().get_readonly_fields(request, obj))
+        readonly.add("location")
         if obj and hasattr(obj, "staff"):
             # is_staff is app-controlled for Staff instances — set automatically by Staff.save()
-            if "is_staff" not in readonly:
-                readonly.append("is_staff")
-        return readonly
+            readonly.add("is_staff")
+        return list(readonly)
 
     @admin.display(description="User Type")
     def get_user_type(self, obj):

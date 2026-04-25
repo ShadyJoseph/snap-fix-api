@@ -11,6 +11,8 @@ class Command(BaseCommand):
         user_model = get_user_model()
         email = os.getenv("DJANGO_SUPERUSER_EMAIL")
         password = os.getenv("DJANGO_SUPERUSER_PASSWORD")
+        first_name = os.getenv("DJANGO_SUPERUSER_FIRST_NAME", "Admin")
+        last_name = os.getenv("DJANGO_SUPERUSER_LAST_NAME", "User")
 
         if not email or not password:
             self.stdout.write("Skipping superuser creation: env vars not set")
@@ -20,5 +22,10 @@ class Command(BaseCommand):
             self.stdout.write("Superuser already exists")
             return
 
-        user_model.objects.create_superuser(email=email, password=password)
+        user_model.objects.create_superuser(
+            email=email,
+            password=password,
+            first_name=first_name,
+            last_name=last_name,
+        )
         self.stdout.write(f"Superuser {email} created successfully")
