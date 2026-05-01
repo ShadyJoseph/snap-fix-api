@@ -18,8 +18,16 @@ Skip-quote path (provider accepts without negotiating):
 pending → assigned → confirmed → in_progress → completed
 
 Direct booking path (customer targets a specific favorite provider):
-pending → assigned  (happens atomically at creation time)
+POST /requests/direct/ → booking_mode=direct stored on the request.
+pending → assigned (happens atomically at creation time)
 … then follows the normal flow from "assigned" onwards (quote / accept / decline).
+
+Recommended booking path (AI scores candidates; customer picks from top 3):
+POST /requests/ with booking_mode=recommended → response embeds a "recommendations"
+array (up to 3 providers with scores + AI reasoning sentences).
+Customer calls POST /requests/recommended/ with chosen provider_id →
+pending → assigned (atomically at creation time, no favorites check required)
+… then follows the normal flow from "assigned" onwards.
 
 Rejection / decline paths:
 quoted → pending (customer rejects quote — back to open pool)
@@ -33,7 +41,8 @@ Status Who triggers
 pending Customer creates request
 assigned Admin assigns a provider OR
 Provider self-picks from the open pool OR
-Customer creates a direct booking (favorites)
+Customer creates a direct booking (favorites) OR
+Customer creates a recommended booking (AI-scored)
 quoted Provider submits a price quote
 confirmed Customer approves the quote OR
 Provider accepts directly (skip-quote path)
@@ -128,6 +137,8 @@ SHARED OBJECTS
 "total_jobs": 25,
 "completed_jobs": 23,
 "completion_rate": 92.0,
+"declined_jobs": 2,
+"acceptance_rate": 0.92,
 "available_balance": "1840.00",
 "total_earnings": "2400.00",
 "hourly_rate": "80.00",
@@ -165,7 +176,7 @@ SHARED OBJECTS
 
 type values and their meaning:
 request_assigned — provider picked the request (from open pool or admin assign)
-direct_booking_request — customer personally requested this provider (direct booking)
+direct_booking_request — customer personally requested this provider (direct booking or recommended booking)
 quote_received — provider submitted a price
 request_accepted — provider accepted directly (no quote)
 job_started — provider began work on-site
@@ -443,12 +454,17 @@ GET /api/v1/providers/me/
         "total_jobs":          25,
         "completed_jobs":      23,
         "completion_rate":     92.0,
+        "declined_jobs":       2,
+        "acceptance_rate":     0.9200,
         "available_balance":   "1840.00",
         "total_earnings":      "2400.00",
         "date_joined":         "2025-01-01T00:00:00Z"
     }
 
     latitude / longitude — null when the provider has no saved location.
+    declined_jobs — count of jobs the provider has declined (lifetime).
+    acceptance_rate — (total_jobs - declined_jobs) / total_jobs, clamped to [0, 1].
+                      null for providers with 0 lifetime jobs.
 
 ────────────────────────────────────────────────────────
 
@@ -456,7 +472,8 @@ PATCH /api/v1/providers/me/
 
     All fields optional. Locked fields (ignored if sent): email, password,
     region, categories, verification_status, rating, total_reviews,
-    total_jobs, completed_jobs, available_balance, total_earnings.
+    total_jobs, completed_jobs, declined_jobs, acceptance_rate,
+    available_balance, total_earnings.
 
     Request (all optional):
     {
@@ -699,6 +716,7 @@ Returned by all booking action endpoints and by list / detail.
 "completed_at": null,
 "cancelled_at": null,
 "declined_at": null,
+"booking_mode": "broadcast",
 "review": null
 }
 
@@ -754,6 +772,13 @@ now be completed.
 cancelled_by / cancelled_by_display
 Empty string when not cancelled. Values: "customer", "provider", "admin".
 
+booking_mode
+"broadcast" (default) — request enters the open pool.
+"direct" — customer booked a provider directly from their favorites
+(POST /requests/direct/). Atomically assigned at creation time.
+"recommended" — customer was shown AI-scored candidates and booked one via
+POST /requests/recommended/. Atomically assigned at creation time.
+
 review
 Null until the customer rates the job. Once rated: <Review> object.
 
@@ -794,10 +819,44 @@ POST /api/v1/bookings/requests/ [customer token]
         "is_urgent":        false,
         "estimated_price":  "150.00",
         "payment_method":   "cash",                             ("cash" | "card" | "wallet", default: "cash")
-        "wallet_amount":    "0.00"                              (optional, default: 0)
+        "wallet_amount":    "0.00",                             (optional, default: 0)
+        "booking_mode":     "broadcast"                         ("broadcast" | "recommended", default: "broadcast")
     }
 
-    Response 201: <ServiceRequest>  (includes photos array)
+    Response 201 (broadcast mode): <ServiceRequest>  (includes photos array)
+
+    Response 201 (recommended mode): <ServiceRequest> + inline recommendations
+    {
+        "<all ServiceRequest fields>",
+        "recommendations": [
+            {
+                "id":                 "uuid",
+                "full_name":          "Ahmed Hassan",
+                "business_name":      "Ahmed's Plumbing",
+                "average_rating":     "4.60",
+                "total_reviews":      38,
+                "completed_jobs":     35,
+                "hourly_rate":        "150.00",
+                "years_of_experience": 5,
+                "acceptance_rate":    0.9600,
+                "distance_km":        1.2,
+                "is_favorite":        false,
+                "score":              87.45,
+                "signals": {
+                    "rating":               92.0,
+                    "distance":             88.0,
+                    "completion_rate":      95.0,
+                    "is_favorite":          false,
+                    "urgency_availability": 100.0
+                },
+                "reason": "Highly rated and only 1.2 km away with a stellar completion record."
+            },
+            ...  (up to 3 items, sorted by score descending)
+        ]
+    }
+    "recommendations" is an empty array if no eligible providers are found.
+    AI reasons fall back to plain-text signal summaries if all AI providers fail.
+
     Response 400: missing required fields, invalid coordinates,
                   or no photos / more than 5 photos attached
     Response 403: provider token used
@@ -854,7 +913,61 @@ POST /api/v1/bookings/requests/direct/ [customer token]
         "wallet_amount":    "0.00"
     }
 
-    Response 201: <ServiceRequest>  (status: "assigned", provider populated)
+    Response 201: <ServiceRequest>  (status: "assigned", booking_mode: "direct", provider populated)
+    Response 400: provider_id fails any guard, missing required fields,
+                  no photos, or more than 5 photos attached
+    Response 403: provider token used
+
+    Notification fired:
+      direct_booking_request → provider
+      ("X personally requested you for «title»")
+
+────────────────────────────────────────────────────────
+
+POST /api/v1/bookings/requests/recommended/ [customer token]
+
+    Completes a recommended booking by assigning the customer's chosen provider.
+    The provider must have appeared in the recommendations list returned by
+    POST /requests/ (booking_mode=recommended), but no favorites check is required.
+
+    The request is created in "pending" and immediately moved to "assigned" in a
+    single atomic transaction. From "assigned" the full standard flow applies
+    (quote / accept directly / decline).
+
+    Must be multipart/form-data (photos required). Customer is taken from the
+    auth token.
+
+    Provider guards (all must pass):
+      • provider verification_status must be "verified"
+      • provider is_available must be true
+      • provider must offer the requested category
+      • provider must have no active job
+        (assigned / quoted / confirmed / in_progress)
+      NOTE: provider does NOT need to be in the customer's favorites.
+
+    Request (* = required):
+    {
+        "provider_id":      "<uuid>",                            *
+        "category":         1,                                   *
+        "region":           1,                                   *
+        "address":          "12 Tahrir St",                      *
+        "floor_number":     "3",                                 *
+        "apartment_number": "12",                                *
+        "special_mark":     "Blue door on the left",             *
+        "latitude":         30.044420,                           *
+        "longitude":        31.235712,                           *
+        "title":            "Leaking pipe",                      *
+        "description":      "Details...",                        *
+        "preferred_date":   "2025-08-01",                        *  (YYYY-MM-DD)
+        "preferred_time":   "10:00:00",                          *  (HH:MM:SS)
+        "photos":           <file>, <file>, ...                  *  (1-5 images, jpg/png)
+        "is_urgent":        false,
+        "estimated_price":  "150.00",
+        "payment_method":   "cash",
+        "wallet_amount":    "0.00"
+    }
+
+    Response 201: <ServiceRequest>  (status: "assigned", booking_mode: "recommended")
     Response 400: provider_id fails any guard, missing required fields,
                   no photos, or more than 5 photos attached
     Response 403: provider token used
@@ -989,7 +1102,19 @@ GET /api/v1/bookings/requests/open/ [provider token]
          (distance_km populated on each result)
       3. Newest first
 
-    Response 200 (paginated): { "count": N, "results": [ <SR>, ... ] }
+    Each result includes two extra fields computed by the recommendation
+    scoring engine so providers can gauge their fit for a job:
+      match_score   — weighted score 0-100 (higher = better match for this provider)
+      match_signals — breakdown of the five scoring signals:
+        {
+          "rating":               92.0,    // provider rating normalised to 0-100
+          "distance":             75.0,    // proximity score (inverse, 0 = at radius limit)
+          "completion_rate":      80.0,    // % of jobs completed
+          "is_favorite":          false,   // whether the customer favourited this provider
+          "urgency_availability": 50.0     // 100 if urgent+available, 50 if available, 0 if not
+        }
+
+    Response 200 (paginated): { "count": N, "results": [ <SR + match_score + match_signals>, ... ] }
 
 ────────────────────────────────────────────────────────
 
@@ -1052,7 +1177,8 @@ POST /api/v1/bookings/requests/<id>/decline/ [provider token]
 
     Reject the assignment. Request returns to the open pool.
     Transition: assigned → pending.
-    Provider total_jobs is decremented. declined_at is stamped.
+    Provider total_jobs is decremented; declined_jobs is incremented.
+    declined_at is stamped. acceptance_rate is updated accordingly.
 
     Request: { "reason": "Not available" }  (optional)
 

@@ -7,6 +7,8 @@ from django.db.models import F
 from django.utils import timezone
 
 from .choices import (
+    AIRecommendationOutcome,
+    BookingMode,
     CancelledBy,
     PaymentMethod,
     PaymentStatus,
@@ -175,6 +177,12 @@ class ServiceRequest(models.Model):
     cancellation_reason = models.TextField(blank=True)
     decline_reason = models.TextField(blank=True)
     admin_notes = models.TextField(blank=True)
+    booking_mode = models.CharField(
+        max_length=max_length(BookingMode),
+        choices=BookingMode.choices,
+        default=BookingMode.BROADCAST,
+        db_index=True,
+    )
 
     # ── Timestamps ────────────────────────────────────────────
 
@@ -574,13 +582,18 @@ class ServiceRequest(models.Model):
             )
         if self.provider_id:
             self.provider.__class__.objects.filter(pk=self.provider_id).update(
-                total_jobs=F("total_jobs") - 1
+                total_jobs=F("total_jobs") - 1,
+                declined_jobs=F("declined_jobs") + 1,
             )
         self.status = ServiceRequestStatus.PENDING
         self.provider = None
         self.assigned_at = None
         self.decline_reason = reason
         self.declined_at = timezone.now()
+        # Re-open declined RECOMMENDED requests as broadcast so they re-enter
+        # the open pool instead of sitting stranded (excluded from open pool).
+        if self.booking_mode == BookingMode.RECOMMENDED:
+            self.booking_mode = BookingMode.BROADCAST
         self.save(
             update_fields=[
                 "status",
@@ -588,6 +601,7 @@ class ServiceRequest(models.Model):
                 "assigned_at",
                 "decline_reason",
                 "declined_at",
+                "booking_mode",
                 "updated_at",
             ]
         )
@@ -652,3 +666,61 @@ class Review(models.Model):
 
     def __str__(self):
         return f"Review #{str(self.service_request_id)[:8]} — {self.rating}★"
+
+
+class AIRecommendationLog(models.Model):
+    """
+    Immutable audit log of every AI provider-recommendation call.
+
+    Records the candidate snapshot sent to the AI, the raw and parsed responses,
+    latency, and outcome. Mirrors AIValidationLog in apps/provider/models.py.
+
+    service_request is nullable so log rows survive even if the customer abandons
+    the flow after receiving recommendations without creating a booking.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service_request = models.ForeignKey(
+        ServiceRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ai_recommendation_logs",
+    )
+    triggered_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    # ── Request context ───────────────────────────────────────────────────────
+    category_name = models.CharField(max_length=200, blank=True)
+    is_urgent = models.BooleanField(default=False)
+    candidate_snapshot = models.JSONField(
+        default=list,
+        help_text="List of scored candidate dicts (provider id, score, signals) captured at call time.",
+    )
+
+    # ── Response ──────────────────────────────────────────────────────────────
+    outcome = models.CharField(
+        max_length=max_length(AIRecommendationOutcome),
+        choices=AIRecommendationOutcome.choices,
+        db_index=True,
+    )
+    raw_response = models.TextField(
+        blank=True, help_text="Raw text returned by the AI before JSON parsing."
+    )
+    parsed_reasons = models.JSONField(
+        default=dict,
+        help_text="Parsed {provider_id: reason} map returned to the caller.",
+    )
+    error_message = models.TextField(blank=True)
+
+    # ── Performance ───────────────────────────────────────────────────────────
+    model_id = models.CharField(max_length=100, blank=True)
+    latency_ms = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = "ai_recommendation_logs"
+        ordering = ["-triggered_at"]
+        verbose_name = "AI Recommendation Log"
+        verbose_name_plural = "AI Recommendation Logs"
+
+    def __str__(self):
+        return f"[{self.outcome}] {self.category_name} — {self.triggered_at:%Y-%m-%d %H:%M}"

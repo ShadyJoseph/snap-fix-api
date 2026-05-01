@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from apps.notifications import service as notifications
 from apps.provider.choices import ProviderVerificationStatus
 
-from .choices import CancelledBy, PaymentMethod, ServiceRequestStatus
+from .choices import BookingMode, CancelledBy, PaymentMethod, ServiceRequestStatus
 from .models import Review, ServiceRequest, ServiceRequestPhoto
 from .serializers import (
     CustomerApproveQuoteSerializer,
@@ -20,6 +20,8 @@ from .serializers import (
     InitiateCardPaymentSerializer,
     ProviderQuoteSerializer,
     ProviderRequestDetailSerializer,
+    RecommendedBookingCreateSerializer,
+    RecommendedProviderSerializer,
     ReviewCreateSerializer,
     ReviewSerializer,
     ServiceRequestCancelSerializer,
@@ -65,6 +67,40 @@ def _sr_queryset_base():
     return ServiceRequest.objects.select_related(
         "category", "region", "customer", "provider", "review"
     ).prefetch_related("photos")
+
+
+def _build_recommendations(sr, user) -> list:
+    """
+    Score and rank available providers for a RECOMMENDED service request,
+    then call the AI to generate a reason per provider.
+
+    Returns a list of serialized recommendation dicts.
+    """
+    from .ai_recommendation import generate_recommendation_reasons
+    from .recommendation import get_top_providers
+
+    customer = user.customer
+    scored = get_top_providers(
+        category=sr.category,
+        location=sr.location,
+        is_urgent=sr.is_urgent,
+        customer=customer,
+    )
+
+    if not scored:
+        return []
+
+    reasons = generate_recommendation_reasons(
+        scored_providers=scored,
+        category_name=sr.category.name,
+        is_urgent=sr.is_urgent,
+        service_request=sr,
+    )
+
+    for item in scored:
+        item["reason"] = reasons.get(str(item["provider"].pk), "")
+
+    return RecommendedProviderSerializer(scored, many=True).data
 
 
 # ── List + Create ─────────────────────────────────────────────────────────────
@@ -121,10 +157,21 @@ class ServiceRequestListView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         sr = _sr_queryset_base().get(pk=serializer.instance.pk)
-        return Response(
-            ServiceRequestSerializer(sr, context={"request": request}).data,
-            status=status.HTTP_201_CREATED,
-        )
+
+        response_data = ServiceRequestSerializer(sr, context={"request": request}).data
+
+        if sr.booking_mode == BookingMode.RECOMMENDED:
+            try:
+                response_data["recommendations"] = _build_recommendations(
+                    sr, request.user
+                )
+            except Exception:
+                logger.exception(
+                    "recommendations failed for SR %s — returning empty list", sr.pk
+                )
+                response_data["recommendations"] = []
+
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
 
 class ServiceRequestDetailView(generics.RetrieveAPIView):
@@ -252,7 +299,89 @@ class DirectBookingView(APIView):
                 raise ValidationError(
                     {"provider_id": "Provider is currently busy with another job."}
                 )
-            sr = serializer.save(customer=customer)
+            sr = serializer.save(customer=customer, booking_mode=BookingMode.DIRECT)
+            for photo in photos:
+                ServiceRequestPhoto.objects.create(service_request=sr, image=photo)
+            fsm_transition(lambda: sr.assign(locked_provider))
+            sr = _sr_queryset_base().get(pk=sr.pk)
+            notifications.notify_provider_direct_request(sr)
+
+        return Response(
+            ServiceRequestSerializer(sr, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class RecommendedBookingView(APIView):
+    """
+    Customer creates a booking directly with an AI-recommended provider.
+
+    Unlike DirectBookingView, the provider does NOT need to be in the customer's
+    favorites list — the AI scoring already validated the match. All other
+    availability / category / verification checks still apply.
+
+    The request is created in PENDING then immediately moved to ASSIGNED via
+    the standard FSM assign() transition. booking_mode is set to 'recommended'.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        from apps.provider.models import Provider
+
+        customer = get_customer_or_403(request.user)
+
+        serializer = RecommendedBookingCreateSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        provider_id = serializer.validated_data.pop("provider_id")
+
+        try:
+            provider = Provider.objects.get(pk=provider_id)
+        except ObjectDoesNotExist:
+            raise ValidationError({"provider_id": "Provider not found."}) from None
+
+        if provider.verification_status != ProviderVerificationStatus.VERIFIED:
+            raise ValidationError({"provider_id": "Provider is not verified."})
+
+        category = serializer.validated_data.get("category")
+        if not provider.categories.filter(pk=category.pk).exists():
+            raise ValidationError(
+                {"provider_id": "Provider does not offer this service category."}
+            )
+
+        photos = request.FILES.getlist("photos")
+        if not photos:
+            raise ValidationError({"photos": "At least one photo is required."})
+        if len(photos) > 5:
+            raise ValidationError({"photos": "Maximum 5 photos allowed."})
+
+        active_statuses = [
+            ServiceRequestStatus.ASSIGNED,
+            ServiceRequestStatus.QUOTED,
+            ServiceRequestStatus.CONFIRMED,
+            ServiceRequestStatus.IN_PROGRESS,
+        ]
+
+        with transaction.atomic():
+            locked_provider = Provider.objects.select_for_update().get(pk=provider_id)
+            if not locked_provider.is_available:
+                raise ValidationError(
+                    {"provider_id": "Provider is currently unavailable."}
+                )
+            if ServiceRequest.objects.filter(
+                provider=locked_provider, status__in=active_statuses
+            ).exists():
+                raise ValidationError(
+                    {"provider_id": "Provider is currently busy with another job."}
+                )
+            sr = serializer.save(
+                customer=customer, booking_mode=BookingMode.RECOMMENDED
+            )
             for photo in photos:
                 ServiceRequestPhoto.objects.create(service_request=sr, image=photo)
             fsm_transition(lambda: sr.assign(locked_provider))
@@ -593,7 +722,7 @@ class ProviderPickRequestView(APIView):
             ServiceRequest.objects.filter(
                 status=ServiceRequestStatus.PENDING,
                 category__in=provider.categories.all(),
-            ),
+            ).exclude(booking_mode=BookingMode.RECOMMENDED),
         )
         with transaction.atomic():
             fsm_transition(lambda: sr.self_assign(provider))
@@ -613,6 +742,7 @@ class ProviderOpenRequestsView(generics.ListAPIView):
                 status=ServiceRequestStatus.PENDING,
                 category__in=provider.categories.all(),
             )
+            .exclude(booking_mode=BookingMode.RECOMMENDED)
             .select_related("category", "region")
             .prefetch_related("photos")
         )
@@ -623,6 +753,45 @@ class ProviderOpenRequestsView(generics.ListAPIView):
         else:
             qs = qs.order_by("-is_urgent", "-created_at")
         return qs
+
+    def list(self, request, *args, **kwargs):
+        from .recommendation import score_provider
+        from .utils import haversine_km
+
+        provider = get_provider_or_403(request.user)
+        qs = self.get_queryset()
+        page = self.paginate_queryset(qs)
+        items = page if page is not None else qs
+
+        data = ServiceRequestSerializer(
+            items, many=True, context={"request": request}
+        ).data
+
+        for i, sr_obj in enumerate(items):
+            dist_km = None
+            if hasattr(sr_obj, "distance") and sr_obj.distance is not None:
+                dist_km = round(sr_obj.distance.km, 3)
+            elif provider.location and sr_obj.location:
+                dist_km = haversine_km(
+                    sr_obj.location.y,
+                    sr_obj.location.x,
+                    provider.location.y,
+                    provider.location.x,
+                )
+
+            if dist_km is not None:
+                scored = score_provider(
+                    provider, dist_km, sr_obj.is_urgent, is_favorite=False
+                )
+                data[i]["match_score"] = scored["score"]
+                data[i]["match_signals"] = scored["signals"]
+            else:
+                data[i]["match_score"] = None
+                data[i]["match_signals"] = None
+
+        if page is not None:
+            return self.get_paginated_response(data)
+        return Response(data)
 
 
 # ── Rating ────────────────────────────────────────────────────────────────────

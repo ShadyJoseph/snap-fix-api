@@ -7,25 +7,17 @@ from apps.core.serializers import CategorySerializer, RegionSerializer
 from apps.customer.serializers import CustomerSerializer
 from apps.provider.serializers import ProviderSerializer
 
-from .choices import PaymentMethod
+from .choices import BookingMode, PaymentMethod
 from .models import Review, ServiceRequest, ServiceRequestPhoto
+from .utils import haversine_km
 
 _TRAVEL_SPEED_KMH = 30
-
-
-def _haversine_km(lat1, lon1, lat2, lon2):
-    r = 6371.0
-    φ1, φ2 = math.radians(lat1), math.radians(lat2)
-    dφ = math.radians(lat2 - lat1)
-    dλ = math.radians(lon2 - lon1)
-    a = math.sin(dφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(dλ / 2) ** 2
-    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _travel_info(from_point, to_point):
     if not from_point or not to_point:
         return None, None
-    km = _haversine_km(from_point.y, from_point.x, to_point.y, to_point.x)
+    km = haversine_km(from_point.y, from_point.x, to_point.y, to_point.x)
     eta = math.ceil(km / _TRAVEL_SPEED_KMH * 60)
     return round(km, 2), eta
 
@@ -84,6 +76,13 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
     latitude = serializers.FloatField(write_only=True)
     longitude = serializers.FloatField(write_only=True)
 
+    booking_mode = serializers.ChoiceField(
+        choices=BookingMode.choices,
+        default=BookingMode.BROADCAST,
+        required=False,
+        write_only=True,
+    )
+
     class Meta:
         model = ServiceRequest
         fields = [
@@ -105,6 +104,7 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
             "estimated_price",
             "payment_method",
             "wallet_amount",
+            "booking_mode",
         ]
         read_only_fields = ["id", "status"]
 
@@ -185,6 +185,62 @@ class DirectBookingCreateSerializer(ServiceRequestCreateSerializer):
         fields = ServiceRequestCreateSerializer.Meta.fields + ["provider_id"]
 
 
+# ── Recommended booking create ────────────────────────────────────────────────
+
+
+class RecommendedBookingCreateSerializer(ServiceRequestCreateSerializer):
+    """
+    Same as the standard create serializer but requires a provider_id.
+
+    Validation (verified, available, offers category) is done in the view.
+    No favourite-list check — the AI recommended this provider.
+
+    booking_mode is excluded — the view always stamps RECOMMENDED at save time,
+    so accepting it from the request body would be misleading.
+    """
+
+    provider_id = serializers.UUIDField(write_only=True)
+
+    class Meta(ServiceRequestCreateSerializer.Meta):
+        fields = [
+            f for f in ServiceRequestCreateSerializer.Meta.fields if f != "booking_mode"
+        ] + ["provider_id"]
+
+
+# ── Recommended provider output ───────────────────────────────────────────────
+
+
+class RecommendedProviderSerializer(serializers.Serializer):
+    """Read-only serializer for a single recommendation result."""
+
+    id = serializers.UUIDField(source="provider.pk")
+    full_name = serializers.SerializerMethodField()
+    business_name = serializers.CharField(source="provider.business_name")
+    average_rating = serializers.DecimalField(
+        source="provider.average_rating", max_digits=3, decimal_places=2
+    )
+    total_reviews = serializers.IntegerField(source="provider.total_reviews")
+    completed_jobs = serializers.IntegerField(source="provider.completed_jobs")
+    hourly_rate = serializers.DecimalField(
+        source="provider.hourly_rate", max_digits=10, decimal_places=2, allow_null=True
+    )
+    years_of_experience = serializers.IntegerField(
+        source="provider.years_of_experience"
+    )
+    acceptance_rate = serializers.SerializerMethodField()
+    distance_km = serializers.FloatField()
+    is_favorite = serializers.BooleanField()
+    score = serializers.FloatField()
+    signals = serializers.DictField()
+    reason = serializers.CharField(default="")
+
+    def get_full_name(self, obj):
+        return obj["provider"].get_full_name()
+
+    def get_acceptance_rate(self, obj):
+        return obj["provider"].acceptance_rate
+
+
 # ── Full read serializer ──────────────────────────────────────────────────────
 
 
@@ -261,6 +317,7 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             "cancelled_at",
             "declined_at",
             "review",
+            "booking_mode",
         ]
 
     def get_latitude(self, obj):

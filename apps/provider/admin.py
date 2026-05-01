@@ -89,9 +89,11 @@ class ProviderAdmin(admin.ModelAdmin):
         "total_earnings",
         "total_jobs",
         "completed_jobs",
+        "declined_jobs",
         "average_rating",
         "total_reviews",
         "completion_rate_display",
+        "acceptance_rate_display",
         "verification_status",
         "is_verified",
     )
@@ -133,7 +135,9 @@ class ProviderAdmin(admin.ModelAdmin):
                 "fields": (
                     "total_jobs",
                     "completed_jobs",
+                    "declined_jobs",
                     "completion_rate_display",
+                    "acceptance_rate_display",
                     "average_rating",
                     "total_reviews",
                 ),
@@ -182,6 +186,13 @@ class ProviderAdmin(admin.ModelAdmin):
     @admin.display(description="Completion Rate")
     def completion_rate_display(self, obj: Provider) -> str:
         return f"{obj.get_completion_rate()}%"
+
+    @admin.display(description="Acceptance Rate")
+    def acceptance_rate_display(self, obj: Provider) -> str:
+        rate = obj.acceptance_rate
+        if rate is None:
+            return "—"
+        return f"{rate * 100:.1f}%"
 
     @admin.action(description="Mark as available")
     def make_available(self, request, queryset) -> None:

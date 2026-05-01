@@ -17,6 +17,7 @@ from .views import (
     ProviderPickRequestView,
     ProviderQuoteView,
     ProviderStartView,
+    RecommendedBookingView,
     ServiceRequestDetailView,
     ServiceRequestListView,
 )
@@ -32,6 +33,11 @@ urlpatterns = [
     ),
     # ── Customer actions ──────────────────────────────────────
     path("requests/direct/", DirectBookingView.as_view(), name="request-direct"),
+    path(
+        "requests/recommended/",
+        RecommendedBookingView.as_view(),
+        name="request-recommended",
+    ),
     path(
         "requests/<uuid:pk>/cancel/",
         CustomerCancelView.as_view(),

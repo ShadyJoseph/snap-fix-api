@@ -7,8 +7,13 @@ from django.utils.html import format_html
 
 from apps.notifications import service as notifications
 
-from .choices import CancelledBy, ServiceRequestStatus
-from .models import ServiceRequest, ServiceRequestPhoto
+from .choices import (
+    AIRecommendationOutcome,
+    BookingMode,
+    CancelledBy,
+    ServiceRequestStatus,
+)
+from .models import AIRecommendationLog, ServiceRequest, ServiceRequestPhoto
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         "category",
         "region",
         "status_badge",
+        "booking_mode_badge",
         "is_urgent",
         "preferred_date",
         "final_price",
@@ -39,6 +45,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "status",
+        "booking_mode",
         "payment_method",
         "payment_status",
         "is_urgent",
@@ -62,6 +69,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     readonly_fields = (
         "id",
         "status",
+        "booking_mode",
         "location",
         "quoted_price",
         "final_price",
@@ -127,7 +135,7 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     )
 
     _pending_fieldsets = (
-        ("Status", {"fields": ("id", "status", "customer_link")}),
+        ("Status", {"fields": ("id", "status", "booking_mode", "customer_link")}),
         (
             "Assign Provider",
             {
@@ -167,7 +175,18 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     )
 
     _change_fieldsets = (
-        ("Status", {"fields": ("id", "status", "customer_link", "provider_link")}),
+        (
+            "Status",
+            {
+                "fields": (
+                    "id",
+                    "status",
+                    "booking_mode",
+                    "customer_link",
+                    "provider_link",
+                )
+            },
+        ),
         (
             "Request Details",
             {"fields": ("title", "description", "category", "is_urgent")},
@@ -252,6 +271,20 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             'font-weight:bold;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">{}</span>',
             colors.get(obj.status, "#757575"),
             obj.get_status_display(),
+        )
+
+    @admin.display(description="Mode")
+    def booking_mode_badge(self, obj):
+        colors = {
+            BookingMode.BROADCAST: "#607D8B",
+            BookingMode.DIRECT: "#7B1FA2",
+            BookingMode.RECOMMENDED: "#0288D1",
+        }
+        return format_html(
+            '<span style="background:{};color:white;padding:2px 8px;border-radius:10px;'
+            'font-size:10px;text-transform:uppercase;letter-spacing:0.5px">{}</span>',
+            colors.get(obj.booking_mode, "#757575"),
+            obj.get_booking_mode_display(),
         )
 
     @admin.display(description="Customer")
@@ -412,3 +445,115 @@ class ServiceRequestAdmin(admin.ModelAdmin):
                 ServiceRequestStatus.IN_PROGRESS,
             ],
         )
+
+
+# ── AI Recommendation Log Admin ───────────────────────────────────────────────
+
+
+@admin.register(AIRecommendationLog)
+class AIRecommendationLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "triggered_at",
+        "category_name",
+        "is_urgent",
+        "outcome_badge",
+        "model_id",
+        "latency_ms",
+        "candidates_count",
+        "service_request_link",
+    )
+    list_filter = ("outcome", "model_id", "is_urgent", "triggered_at")
+    search_fields = ("category_name", "service_request__id")
+    date_hierarchy = "triggered_at"
+    ordering = ["-triggered_at"]
+
+    readonly_fields = (
+        "id",
+        "triggered_at",
+        "service_request_link",
+        "category_name",
+        "is_urgent",
+        "outcome_badge",
+        "model_id",
+        "latency_ms",
+        "candidate_snapshot",
+        "parsed_reasons",
+        "raw_response",
+        "error_message",
+    )
+
+    fieldsets = (
+        (
+            "Overview",
+            {
+                "fields": (
+                    "id",
+                    "triggered_at",
+                    "service_request_link",
+                    "category_name",
+                    "is_urgent",
+                    "outcome_badge",
+                ),
+            },
+        ),
+        (
+            "Candidates",
+            {"fields": ("candidate_snapshot",)},
+        ),
+        (
+            "AI Response",
+            {"fields": ("parsed_reasons", "raw_response", "error_message")},
+        ),
+        (
+            "Performance",
+            {"fields": ("model_id", "latency_ms")},
+        ),
+    )
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+    def has_delete_permission(self, request, obj=None) -> bool:
+        return request.user.is_superuser
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("service_request")
+
+    @admin.display(description="Outcome")
+    def outcome_badge(self, obj):
+        colors = {
+            AIRecommendationOutcome.SUCCESS: "#4CAF50",
+            AIRecommendationOutcome.FALLBACK: "#FF9800",
+            AIRecommendationOutcome.BYPASSED: "#9E9E9E",
+            AIRecommendationOutcome.ERROR: "#F44336",
+        }
+        return format_html(
+            '<span style="background:{};color:white;padding:3px 10px;'
+            "border-radius:10px;font-weight:bold;font-size:10px;"
+            'text-transform:uppercase">{}</span>',
+            colors.get(obj.outcome, "#757575"),
+            obj.get_outcome_display(),
+        )
+
+    @admin.display(description="Service Request")
+    def service_request_link(self, obj):
+        if not obj.service_request_id:
+            return format_html(
+                '<span style="color:#999;font-style:italic">Unlinked</span>'
+            )
+        url = reverse(
+            "admin:booking_servicerequest_change", args=[obj.service_request_id]
+        )
+        return format_html(
+            '<a href="{}">{}</a>',
+            url,
+            str(obj.service_request_id)[:8].upper(),
+        )
+
+    @admin.display(description="Candidates")
+    def candidates_count(self, obj):
+        n = len(obj.candidate_snapshot) if obj.candidate_snapshot else 0
+        return n

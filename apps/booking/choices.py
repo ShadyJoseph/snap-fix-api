@@ -42,3 +42,16 @@ class CancelledBy(models.TextChoices):
     CUSTOMER = "customer", "Customer"
     PROVIDER = "provider", "Provider"
     ADMIN = "admin", "Admin"
+
+
+class BookingMode(models.TextChoices):
+    BROADCAST = "broadcast", "Broadcast to All Providers"
+    DIRECT = "direct", "Direct (Favorites)"
+    RECOMMENDED = "recommended", "AI Recommended"
+
+
+class AIRecommendationOutcome(models.TextChoices):
+    SUCCESS = "success", "Success"
+    FALLBACK = "fallback", "Fallback (generic reasons)"
+    BYPASSED = "bypassed", "Bypassed (flag off)"
+    ERROR = "error", "Error"

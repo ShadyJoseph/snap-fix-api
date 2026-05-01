@@ -235,6 +235,17 @@ CONSTANCE_CONFIG = {
         "Which AI provider to use. Choices: openai, groq, gemini, anthropic, all.",
         str,
     ),
+    "AI_RECOMMENDATION_ENABLED": (
+        True,
+        "Enable AI-generated recommendation reasons when a customer requests recommended providers. "
+        "Disable to return plain-text reasons derived from scores (no API call).",
+        bool,
+    ),
+    "AI_RECOMMENDATION_PROVIDER": (
+        "all",
+        "Which AI provider to use for recommendation reasons. Choices: openai, groq, gemini, anthropic, all.",
+        str,
+    ),
     # Onboarding rules
     "ONBOARDING_REJECTION_COOLDOWN_DAYS": (
         30,
@@ -249,7 +260,12 @@ CONSTANCE_CONFIG = {
 }
 
 CONSTANCE_CONFIG_FIELDSETS = {
-    "AI Settings": ("AI_VALIDATION_ENABLED", "AI_VALIDATION_PROVIDER"),
+    "AI Settings": (
+        "AI_VALIDATION_ENABLED",
+        "AI_VALIDATION_PROVIDER",
+        "AI_RECOMMENDATION_ENABLED",
+        "AI_RECOMMENDATION_PROVIDER",
+    ),
     "Onboarding Rules": (
         "ONBOARDING_REJECTION_COOLDOWN_DAYS",
         "ONBOARDING_MAX_FILE_SIZE_MB",

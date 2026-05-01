@@ -51,7 +51,7 @@ The DB write is the source of truth. The FCM push is best-effort delivery to the
 | `type`                  | Recipient | Triggered when                                           | FSM transition            | Trigger path                                                |
 | ----------------------- | --------- | -------------------------------------------------------- | ------------------------- | ----------------------------------------------------------- |
 | `request_assigned`              | Customer  | Provider picks from pool **or** admin assigns            | `pending → assigned`              | View + Admin `save_model`                                   |
-| `direct_booking_request`        | Provider  | Customer creates a direct booking targeting this provider | `pending → assigned` (at creation) | View (`DirectBookingView`)                                 |
+| `direct_booking_request`        | Provider  | Customer directly books this provider (from favorites **or** AI recommendation) | `pending → assigned` (at creation) | View (`DirectBookingView`, `RecommendedBookingView`)        |
 | `quote_received`                | Customer  | Provider submits a price                                 | `assigned → quoted`               | View                                                        |
 | `request_accepted`              | Customer  | Provider accepts directly (no quote)                     | `assigned → confirmed`            | View                                                        |
 | `job_started`                   | Customer  | Provider begins work                                     | `confirmed → in_progress`         | View                                                        |
@@ -301,7 +301,7 @@ Use `data.type` from the push payload directly — it is identical to the `type`
 | `type`                  | Navigate to                                     |
 | ----------------------- | ----------------------------------------------- |
 | `request_assigned`      | Request detail screen                           |
-| `direct_booking_request` | Incoming jobs screen → request detail (provider was personally chosen) |
+| `direct_booking_request` | Incoming jobs screen → request detail (provider was personally chosen — direct or recommended) |
 | `quote_received`        | Request detail → Quote review section           |
 | `request_accepted`      | Request detail screen                           |
 | `job_started`           | Request detail → In-progress view               |
@@ -335,10 +335,10 @@ Fetch `GET /api/v1/notifications/` on app open and after each incoming push to k
 | `GOOGLE_APPLICATION_CREDENTIALS`      | Local `.env` / docker-compose secrets     | Path to the Firebase service-account JSON file (local dev) |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Railway → Variables                       | Full JSON content of the service-account file (production) |
 | `REDIS_URL`                           | Set automatically by Railway Redis plugin | Celery broker + result backend                             |
-| `ANTHROPIC_API_KEY`                   | Railway → Variables / `.env`              | Anthropic Claude Haiku — AI document validation            |
-| `OPENAI_API_KEY`                      | Railway → Variables / `.env`              | OpenAI GPT-4o-mini — AI document validation                |
-| `GROQ_API_KEY`                        | Railway → Variables / `.env`              | Groq Llama vision — AI document validation                 |
-| `GEMINI_API_KEY`                      | Railway → Variables / `.env`              | Google Gemini 1.5 Flash — AI document validation           |
+| `ANTHROPIC_API_KEY`                   | Railway → Variables / `.env`              | Anthropic Claude Haiku — AI document validation + provider recommendations |
+| `OPENAI_API_KEY`                      | Railway → Variables / `.env`              | OpenAI GPT-4o-mini — AI document validation + provider recommendations     |
+| `GROQ_API_KEY`                        | Railway → Variables / `.env`              | Groq Llama — AI document validation + provider recommendations             |
+| `GEMINI_API_KEY`                      | Railway → Variables / `.env`              | Google Gemini Flash — AI document validation + provider recommendations     |
 
 **Production startup behaviour:** If neither credential variable is set, or if Firebase initialization fails for any reason (e.g. malformed JSON, invalid key), the app raises at startup and refuses to start when `DEBUG=False`. In development (`DEBUG=True`) it logs a warning and continues — push notifications will not be delivered but the inbox API works normally.
 

@@ -2,7 +2,8 @@
 
 Django REST Framework + GeoDjango backend for the SnapFix home-services platform.
 Handles customer bookings, provider onboarding & matching, FSM-driven service-request
-lifecycle, and multi-method payment settlement (cash / card / wallet).
+lifecycle, multi-method payment settlement (cash / card / wallet), and AI-powered
+provider recommendation with a multi-provider scoring engine (OpenAI, Gemini, Groq, Anthropic).
 
 ## Prerequisites
 
@@ -89,6 +90,7 @@ make test-app app=apps.core.tests.test_views
 make test-app app=apps.customer.tests.test_views
 make test-app app=apps.provider.tests.test_provider_onboarding
 make test-app app=apps.notifications.tests.test_notifications
+make test-app app=apps.booking.tests.test_recommendations
 
 # Run a specific test class or method
 make test-class path=apps.customer.tests.test_views.CustomerRegisterTests
@@ -175,7 +177,7 @@ snap-fix-api/
 │   ├── core/             # Categories, regions, offices
 │   ├── customer/         # Customer auth & profile
 │   ├── provider/         # Provider auth, profile & onboarding FSM
-│   ├── booking/          # Service request lifecycle, payments, reviews
+│   ├── booking/          # Service request lifecycle, payments, reviews, AI recommendation
 │   ├── staff/            # Staff accounts
 │   └── user/             # Shared base user model
 ├── config/
@@ -189,7 +191,9 @@ snap-fix-api/
 ├── manage.py
 ├── requirements.txt
 ├── makefile
-├── URLs.md               # Full API reference with request/response shapes
+├── URLs.md                  # Full API reference with request/response shapes
+├── AI_RECOMMENDATION.md     # Mobile integration guide for the AI recommendation flow
+├── AI_VALIDATION_PIPELINE.md # Architecture doc for onboarding document AI validation
 ├── .env.example
 └── README.md
 ```
@@ -199,6 +203,7 @@ snap-fix-api/
 ## API Overview
 
 Full request/response documentation lives in [URLs.md](URLs.md).
+Mobile integration for the AI recommendation flow: [AI_RECOMMENDATION.md](AI_RECOMMENDATION.md).
 
 ### Service-Request State Flow
 
@@ -208,6 +213,17 @@ pending → assigned → quoted → confirmed → in_progress → completed
 
 CANCELLED is reachable from: pending, assigned, quoted, confirmed, in_progress.
 ```
+
+### Booking Modes
+
+| Mode                  | How it works                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `broadcast` (default) | Request enters the open pool; any matching provider can self-assign                                                                         |
+| `direct`              | Customer books a provider from their favorites via `POST /requests/direct/`; atomically assigned at creation                                |
+| `recommended`         | On creation the API scores eligible providers and returns the top 3 with AI reasoning; customer picks one via `POST /requests/recommended/` |
+
+Scoring signals (shared engine used for both recommendation and the provider open-requests view):
+rating (30%) · distance (25%) · completion rate (20%) · favourite bonus (15%) · urgency availability (10%)
 
 ---
 

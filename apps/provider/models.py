@@ -83,6 +83,7 @@ class Provider(User):
     )
     total_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     completed_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
+    declined_jobs = models.IntegerField(default=0, validators=[MinValueValidator(0)])
     average_rating = models.DecimalField(
         max_digits=3,
         decimal_places=2,
@@ -120,12 +121,20 @@ class Provider(User):
     def get_completion_rate(self) -> float:
         if self.total_jobs == 0:
             return 0
-        return round((self.completed_jobs / self.total_jobs) * 100, 2)
+        return round(min(100.0, (self.completed_jobs / self.total_jobs) * 100), 2)
 
     @property
     def rating(self) -> float:
         """Rounded average rating for display on the provider profile."""
         return round(float(self.average_rating), 2)
+
+    @property
+    def acceptance_rate(self) -> float | None:
+        if self.total_jobs == 0:
+            return None
+        return round(
+            max(0.0, (self.total_jobs - self.declined_jobs) / self.total_jobs), 4
+        )
 
     def update_rating(self, new_rating: int) -> None:
         """Atomically recalculate average_rating using a single DB UPDATE."""

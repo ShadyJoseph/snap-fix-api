@@ -2,6 +2,10 @@
 
 Automated document verification that runs on every provider onboarding submission before a human reviewer sees the application. Non-blocking by design: every failure path falls back gracefully so the onboarding queue never stalls.
 
+> **Two AI pipelines in this codebase:**
+> - **This document** — `apps/provider/ai_validation.py` — validates onboarding documents (vision models, Celery background task, advisory result for staff).
+> - **Recommendation pipeline** — `apps/booking/ai_recommendation.py` — generates one-sentence provider match reasons at booking time (inline, synchronous, returns immediately). Same multi-provider registry and fallback pattern; controlled by `AI_RECOMMENDATION_ENABLED` and `AI_RECOMMENDATION_PROVIDER` in Constance.
+
 ---
 
 ## Table of Contents
@@ -316,6 +320,8 @@ All tuneable settings are in Django Admin → **Constance → Change** — no re
 | `AI_VALIDATION_PROVIDER` | str | `"all"` | Which adapter(s) to use: `openai`, `gemini`, `groq`, `anthropic`, `all` |
 | `ONBOARDING_REJECTION_COOLDOWN_DAYS` | int | `30` | Days before a rejected provider can resubmit |
 | `ONBOARDING_MAX_FILE_SIZE_MB` | int | `5` | Max upload size per document (enforced at model `clean()`) |
+| `AI_RECOMMENDATION_ENABLED` | bool | `True` | `False` skips AI calls on recommended bookings and returns plain-text reasons |
+| `AI_RECOMMENDATION_PROVIDER` | str | `"all"` | Which adapter(s) to use for provider recommendations: `openai`, `gemini`, `groq`, `anthropic`, `all` |
 
 **Operational tips:**
 - Set `AI_VALIDATION_ENABLED = False` during load tests or when all AI APIs are degraded — applications still queue normally for staff review.
