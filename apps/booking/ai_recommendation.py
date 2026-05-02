@@ -79,8 +79,9 @@ def _build_prompt(
         "Return JSON only, no extra text:",
         "{",
     ]
-    for item in scored_providers:
-        lines.append(f'  "{item["provider"].pk}": "<reason>",')
+    for i, item in enumerate(scored_providers):
+        comma = "," if i < len(scored_providers) - 1 else ""
+        lines.append(f'  "{item["provider"].pk}": "<reason>"{comma}')
     lines.append("}")
 
     return "\n".join(lines)

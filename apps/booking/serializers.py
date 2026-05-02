@@ -139,6 +139,7 @@ class ServiceRequestCreateSerializer(serializers.ModelSerializer):
         if payment_method == PaymentMethod.WALLET and estimated_price is not None:
             if wallet_amount < estimated_price:
                 # Auto-fill: if customer chose WALLET, treat wallet_amount as full price.
+                wallet_amount = estimated_price
                 data["wallet_amount"] = estimated_price
 
         # Validate wallet balance if wallet is used.

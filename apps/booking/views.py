@@ -722,7 +722,7 @@ class ProviderPickRequestView(APIView):
             ServiceRequest.objects.filter(
                 status=ServiceRequestStatus.PENDING,
                 category__in=provider.categories.all(),
-            ).exclude(booking_mode=BookingMode.RECOMMENDED),
+            ).exclude(booking_mode__in=[BookingMode.RECOMMENDED, BookingMode.DIRECT]),
         )
         with transaction.atomic():
             fsm_transition(lambda: sr.self_assign(provider))
@@ -742,7 +742,7 @@ class ProviderOpenRequestsView(generics.ListAPIView):
                 status=ServiceRequestStatus.PENDING,
                 category__in=provider.categories.all(),
             )
-            .exclude(booking_mode=BookingMode.RECOMMENDED)
+            .exclude(booking_mode__in=[BookingMode.RECOMMENDED, BookingMode.DIRECT])
             .select_related("category", "region")
             .prefetch_related("photos")
         )

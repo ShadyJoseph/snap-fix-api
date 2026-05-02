@@ -1,7 +1,11 @@
 import uuid
 
 from django.contrib.gis.db import models
-from django.core.validators import FileExtensionValidator, MinValueValidator
+from django.core.validators import (
+    FileExtensionValidator,
+    MaxValueValidator,
+    MinValueValidator,
+)
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
@@ -646,7 +650,7 @@ class Review(models.Model):
         related_name="reviews",
     )
     rating = models.PositiveSmallIntegerField(
-        validators=[MinValueValidator(1)],
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
         help_text="1-5 stars",
     )
     comment = models.TextField(blank=True)
