@@ -1,3 +1,4 @@
+from django.contrib import admin
 from django.contrib.gis import admin as gis_admin
 from django.utils.html import format_html
 
@@ -19,8 +20,8 @@ class EgyptGISModelAdmin(gis_admin.GISModelAdmin):
     }
 
 
-@gis_admin.register(Category)
-class CategoryAdmin(gis_admin.ModelAdmin):
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
     list_display = ("icon_display", "name", "slug", "is_active", "order", "created_at")
     list_filter = ("is_active",)
     search_fields = ("name", "slug", "description")
@@ -37,7 +38,7 @@ class CategoryAdmin(gis_admin.ModelAdmin):
         ),
     )
 
-    @gis_admin.display(description="Icon")
+    @admin.display(description="Icon")
     def icon_display(self, obj):
         if obj.icon:
             return format_html('<span style="font-size:20px">{}</span>', obj.icon)

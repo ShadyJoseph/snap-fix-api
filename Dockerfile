@@ -22,11 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the code
 COPY . .
 
-# Collect static files
-RUN SECRET_KEY=build-phase-dummy-key DEBUG=True python manage.py collectstatic --noinput
-
-RUN mkdir -p /app/media
+RUN mkdir -p /app/media /app/staticfiles
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "python manage.py migrate --noinput && echo \"=== PORT = ${PORT} ===\"; gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers 2 --timeout 120 --access-logfile - --error-logfile - --log-level debug"]
+# collectstatic runs at startup (after volumes are mounted) so Railway
+# volume mounts don't silently shadow files baked into the image at build time.
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:${PORT:-8080} --workers ${WEB_CONCURRENCY:-2} --timeout 120 --log-level info --access-logfile - --error-logfile -"]

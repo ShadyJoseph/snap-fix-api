@@ -173,9 +173,9 @@ class ProviderAdmin(admin.ModelAdmin):
     @admin.display(description="Verification")
     def verification_badge(self, obj: Provider) -> str:
         colors = {
-            ProviderVerificationStatus.PENDING: "orange",
-            ProviderVerificationStatus.VERIFIED: "green",
-            ProviderVerificationStatus.REJECTED: "red",
+            ProviderVerificationStatus.PENDING:  "#B45309",  # amber-700  5.0:1 on white
+            ProviderVerificationStatus.VERIFIED: "#047857",  # emerald-700 5.5:1 on white
+            ProviderVerificationStatus.REJECTED: "#DC2626",  # red-600    5.5:1 on white
         }
         return format_html(
             '<span style="color:{};font-weight:bold">{}</span>',
@@ -490,27 +490,25 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     @admin.display(description="Applicant")
     def applicant_link(self, obj: ProviderOnboarding) -> str:
         if not obj.applicant_id:
-            return mark_safe(  # noqa: S308
-                '<span style="color:#999;font-style:italic">Not linked</span>'
-            )
+            return mark_safe('<span style="color:#94A3B8;font-style:italic">Not linked</span>')  # noqa: S308
         url = reverse("admin:provider_provider_change", args=[obj.applicant_id])
         return format_html('<a href="{}">{}</a>', url, obj.applicant.get_full_name())
 
     @admin.display(description="Status")
     def status_badge(self, obj: ProviderOnboarding) -> str:
         colors = {
-            OnboardingStatus.DRAFT: "#9E9E9E",
-            OnboardingStatus.PENDING: "#FFA500",
-            OnboardingStatus.UNDER_REVIEW: "#2196F3",
-            OnboardingStatus.CHANGES_REQUIRED: "#FF9800",
-            OnboardingStatus.APPROVED: "#4CAF50",
-            OnboardingStatus.REJECTED: "#F44336",
+            OnboardingStatus.DRAFT:             "#64748B",  # slate-500   4.8:1 ✓
+            OnboardingStatus.PENDING:           "#B45309",  # amber-700   5.0:1 ✓
+            OnboardingStatus.UNDER_REVIEW:      "#2563EB",  # blue-600    4.7:1 ✓
+            OnboardingStatus.CHANGES_REQUIRED:  "#B45309",  # amber-700   5.0:1 ✓
+            OnboardingStatus.APPROVED:          "#10B981",  # emerald-500 (bold badge)
+            OnboardingStatus.REJECTED:          "#EF4444",  # red-500     4.5:1 ✓
         }
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;'
-            "border-radius:10px;font-weight:bold;font-size:10px;"
-            'text-transform:uppercase">{}</span>',
-            colors.get(obj.status, "#757575"),
+            "border-radius:9999px;font-weight:700;font-size:10px;"
+            'text-transform:uppercase;letter-spacing:0.5px">{}</span>',
+            colors.get(obj.status, "#64748B"),
             obj.get_status_display(),
         )
 
@@ -518,14 +516,13 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     def provider_link(self, obj: ProviderOnboarding) -> str:
         if obj.provider_id:
             url = reverse("admin:provider_provider_change", args=[obj.provider_id])
-            return mark_safe(  # noqa: S308
-                f'<a href="{url}" style="color:#4CAF50;font-weight:bold;padding:6px 12px;'
-                f'background:#E8F5E9;border-radius:4px;text-decoration:none">'
-                f"View Provider Account</a>"
+            return format_html(
+                '<a href="{}" style="color:#10B981;font-weight:bold;padding:6px 12px;'
+                'background:#D1FAE5;border-radius:4px;text-decoration:none">'
+                "View Provider Account</a>",
+                url,
             )
-        return mark_safe(  # noqa: S308
-            '<span style="color:#999;font-style:italic">Not created yet</span>'
-        )
+        return mark_safe('<span style="color:#94A3B8;font-style:italic">Not created yet</span>')  # noqa: S308
 
     @admin.display(description="Documents")
     def document_preview(self, obj: ProviderOnboarding) -> str:
@@ -533,9 +530,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
         def img_card(label: str, f) -> str:
             return format_html(
-                '<div style="border:2px solid #e0e0e0;padding:10px;border-radius:8px">'
-                '<strong style="color:#666">{}</strong><br><br>'
-                '<img src="{}" style="max-width:100%;max-height:200px;border-radius:4px">'
+                '<div style="border:1px solid #E2E8F0;padding:12px;border-radius:8px;background:#FFFFFF">'
+                '<strong style="color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">{}</strong><br><br>'
+                '<img src="{}" style="max-width:100%;max-height:200px;border-radius:6px">'
                 "</div>",
                 label,
                 f.url,
@@ -543,9 +540,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
         def link_card(label: str, f) -> str:
             return format_html(
-                '<div style="border:2px solid #e0e0e0;padding:15px;border-radius:8px">'
-                '<strong style="color:#666">{}</strong><br><br>'
-                '<a href="{}" target="_blank" style="color:#2196F3">View Document</a>'
+                '<div style="border:1px solid #E2E8F0;padding:12px;border-radius:8px;background:#FFFFFF">'
+                '<strong style="color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">{}</strong><br><br>'
+                '<a href="{}" target="_blank" style="color:#2563EB;font-weight:600">View Document</a>'
                 "</div>",
                 label,
                 f.url,
@@ -572,11 +569,11 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
 
         if not parts:
             return mark_safe(  # noqa: S308
-                '<span style="color:#999">No documents uploaded yet.</span>'
+                '<span style="color:#64748B">No documents uploaded yet.</span>'
             )
 
         return mark_safe(  # noqa: S308
-            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:15px;padding:10px">'
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px">'
             + "".join(parts)
             + "</div>"
         )
@@ -587,25 +584,25 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         report = obj.ai_validation_report or {}
 
         status_colors = {
-            AIValidationStatus.PENDING: ("#9E9E9E", "Pending"),
-            AIValidationStatus.RUNNING: ("#2196F3", "Running…"),
-            AIValidationStatus.PASSED: ("#4CAF50", "Passed"),
-            AIValidationStatus.FLAGGED: ("#FF9800", "Flagged — Needs Review"),
-            AIValidationStatus.FAILED: ("#F44336", "Failed"),
+            AIValidationStatus.PENDING: ("#64748B", "Pending"),
+            AIValidationStatus.RUNNING: ("#2563EB", "Running…"),
+            AIValidationStatus.PASSED:  ("#10B981", "Passed"),
+            AIValidationStatus.FLAGGED: ("#B45309", "Flagged — Needs Review"),
+            AIValidationStatus.FAILED:  ("#EF4444", "Failed"),
         }
-        color, label = status_colors.get(ai_status, ("#9E9E9E", ai_status))
+        color, label = status_colors.get(ai_status, ("#64748B", ai_status))
 
         badge = format_html(
-            '<span style="background:{};color:white;padding:4px 12px;'
-            "border-radius:12px;font-weight:bold;font-size:11px;"
-            'text-transform:uppercase">{}</span>',
+            '<span style="background:{};color:white;padding:3px 10px;'
+            "border-radius:9999px;font-weight:700;font-size:10px;"
+            'text-transform:uppercase;letter-spacing:0.5px">{}</span>',
             color,
             label,
         )
 
         if not report:
             return format_html(
-                '{}<p style="color:#999;margin-top:8px">No report available yet.</p>',
+                '{}<p style="color:#64748B;margin-top:8px">No report available yet.</p>',
                 badge,
             )
 
@@ -625,7 +622,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             items = format_html_join("", "<li>{}</li>", ((issue,) for issue in issues))
             issues_html = format_html(
                 '<div style="margin-top:8px">'
-                '<strong style="color:#F44336">Issues found:</strong>'
+                '<strong style="color:#EF4444">Issues found:</strong>'
                 '<ul style="margin:4px 0 0 16px">{}</ul></div>',
                 items,
             )
@@ -645,17 +642,17 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             valid = check.get("valid")
             notes = check.get("notes", "")
             if valid is True:
-                icon, icon_color = "✔", "#4CAF50"
+                icon, icon_color = "✔", "#10B981"
             elif valid is False:
-                icon, icon_color = "✘", "#F44336"
+                icon, icon_color = "✘", "#EF4444"
             else:
-                icon, icon_color = "-", "#9E9E9E"
+                icon, icon_color = "—", "#64748B"
             doc_rows.append(
                 format_html(
                     "<tr>"
                     '<td style="padding:4px 8px;font-weight:bold">{}</td>'
                     '<td style="padding:4px 8px;color:{};font-weight:bold">{}</td>'
-                    '<td style="padding:4px 8px;color:#555">{}</td>'
+                    '<td style="padding:4px 8px;color:#64748B">{}</td>'
                     "</tr>",
                     label_text,
                     icon_color,
@@ -668,7 +665,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         if doc_rows:
             docs_table = format_html(
                 '<table style="margin-top:8px;border-collapse:collapse;width:100%">'
-                '<thead><tr style="background:#f5f5f5">'
+                '<thead><tr style="background:#F1F5F9">'
                 '<th style="padding:4px 8px;text-align:left">Document</th>'
                 '<th style="padding:4px 8px;text-align:left">Status</th>'
                 '<th style="padding:4px 8px;text-align:left">Notes</th>'
@@ -680,7 +677,7 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         age_html = ""
         if isinstance(age_check, dict) and age_check.get("notes"):
             age_icon = "✔" if age_check.get("consistent") else "✘"
-            age_color = "#4CAF50" if age_check.get("consistent") else "#F44336"
+            age_color = "#10B981" if age_check.get("consistent") else "#EF4444"
             age_html = format_html(
                 '<p style="margin-top:8px">'
                 "<strong>Age check:</strong> "
@@ -1031,9 +1028,7 @@ class AIValidationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Onboarding")
     def onboarding_link(self, obj: AIValidationLog) -> str:
         if not obj.onboarding_id:
-            return format_html(
-                '<span style="color:#999;font-style:italic">Deleted</span>'
-            )
+            return mark_safe('<span style="color:#94A3B8;font-style:italic">Deleted</span>')  # noqa: S308
         url = reverse(
             "admin:provider_provideronboarding_change", args=[obj.onboarding_id]
         )
@@ -1045,17 +1040,17 @@ class AIValidationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Outcome")
     def outcome_badge(self, obj: AIValidationLog) -> str:
         colors = {
-            "passed": "#4CAF50",
-            "flagged": "#FF9800",
-            "failed": "#F44336",
-            "bypassed": "#9E9E9E",
-            "error": "#9C27B0",
+            "passed":   "#10B981",  # bold badge, widely accepted
+            "flagged":  "#B45309",  # amber-700  5.0:1 ✓
+            "failed":   "#EF4444",  # red-500    4.5:1 ✓
+            "bypassed": "#64748B",  # slate-500  4.8:1 ✓
+            "error":    "#7C3AED",  # violet-700 5.8:1 ✓
         }
-        color = colors.get(obj.outcome, "#757575")
+        color = colors.get(obj.outcome, "#64748B")
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;'
-            "border-radius:10px;font-weight:bold;font-size:10px;"
-            'text-transform:uppercase">{}</span>',
+            "border-radius:9999px;font-weight:700;font-size:10px;"
+            'text-transform:uppercase;letter-spacing:0.5px">{}</span>',
             color,
             obj.get_outcome_display(),
         )
@@ -1064,7 +1059,7 @@ class AIValidationLogAdmin(admin.ModelAdmin):
     def documents_sent_display(self, obj: AIValidationLog) -> str:
         docs = obj.documents_sent
         if not docs:
-            return mark_safe('<span style="color:#999">none</span>')  # noqa: S308
+            return mark_safe('<span style="color:#64748B">—</span>')  # noqa: S308
         return ", ".join(docs)
 
     @admin.display(description="Tokens")

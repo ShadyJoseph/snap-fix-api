@@ -1,0 +1,27 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}{{ title }} | SnapFix Admin{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="{% static 'admin/img/logo.png' %}">
+{% endblock %}
+
+{% block branding %}
+<a href="{% url 'admin:index' %}" id="sf-brand">
+  <img src="{% static 'admin/img/logo.png' %}" alt="SnapFix" id="sf-logo">
+  <span class="sf-wordmark">
+    <span class="sf-snap">Snap</span><span class="sf-fix">Fix</span>
+  </span>
+  <span class="sf-sub">Admin</span>
+</a>
+{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'admin/css/snapfix.css' %}">
+{% endblock %}

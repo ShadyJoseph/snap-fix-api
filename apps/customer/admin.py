@@ -22,6 +22,7 @@ class CustomerAdmin(admin.ModelAdmin):
         "last_login",
         "updated_at",
         "total_cashback",
+        "total_bookings",
         "location",
     )
     filter_horizontal = ("favorite_providers",)
@@ -53,7 +54,8 @@ class CustomerAdmin(admin.ModelAdmin):
         ),
     )
 
+    def has_add_permission(self, request):
+        return False
+
     def get_queryset(self, request):
-        """Optimize queries with prefetch_related for favorites"""
-        qs = super().get_queryset(request)
-        return qs.prefetch_related("favorite_providers")
+        return super().get_queryset(request).prefetch_related("favorite_providers")

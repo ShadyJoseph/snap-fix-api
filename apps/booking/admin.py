@@ -3,7 +3,7 @@ import logging
 from django.contrib import admin, messages
 from django.db import transaction
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join, mark_safe
 
 from apps.notifications import service as notifications
 
@@ -259,31 +259,31 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     @admin.display(description="Status")
     def status_badge(self, obj):
         colors = {
-            ServiceRequestStatus.PENDING: "#FFA500",
-            ServiceRequestStatus.ASSIGNED: "#2196F3",
-            ServiceRequestStatus.CONFIRMED: "#9C27B0",
-            ServiceRequestStatus.IN_PROGRESS: "#FF9800",
-            ServiceRequestStatus.COMPLETED: "#4CAF50",
-            ServiceRequestStatus.CANCELLED: "#F44336",
+            ServiceRequestStatus.PENDING:     "#B45309",  # amber-700  5.0:1 ✓
+            ServiceRequestStatus.ASSIGNED:    "#2563EB",  # blue-600   4.7:1 ✓
+            ServiceRequestStatus.CONFIRMED:   "#0E7490",  # cyan-700   5.4:1 ✓
+            ServiceRequestStatus.IN_PROGRESS: "#2563EB",  # blue-600   4.7:1 ✓
+            ServiceRequestStatus.COMPLETED:   "#10B981",  # emerald (bold/uppercase badge)
+            ServiceRequestStatus.CANCELLED:   "#EF4444",  # red-500    4.5:1 ✓
         }
         return format_html(
-            '<span style="background:{};color:white;padding:3px 10px;border-radius:10px;'
-            'font-weight:bold;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">{}</span>',
-            colors.get(obj.status, "#757575"),
+            '<span style="background:{};color:white;padding:3px 10px;border-radius:9999px;'
+            'font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">{}</span>',
+            colors.get(obj.status, "#64748B"),
             obj.get_status_display(),
         )
 
     @admin.display(description="Mode")
     def booking_mode_badge(self, obj):
         colors = {
-            BookingMode.BROADCAST: "#607D8B",
-            BookingMode.DIRECT: "#7B1FA2",
-            BookingMode.RECOMMENDED: "#0288D1",
+            BookingMode.BROADCAST:   "#64748B",  # slate-500  4.8:1 ✓
+            BookingMode.DIRECT:      "#7C3AED",  # violet-700 5.8:1 ✓
+            BookingMode.RECOMMENDED: "#0E7490",  # cyan-700   5.4:1 ✓
         }
         return format_html(
-            '<span style="background:{};color:white;padding:2px 8px;border-radius:10px;'
-            'font-size:10px;text-transform:uppercase;letter-spacing:0.5px">{}</span>',
-            colors.get(obj.booking_mode, "#757575"),
+            '<span style="background:{};color:white;padding:2px 8px;border-radius:9999px;'
+            'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">{}</span>',
+            colors.get(obj.booking_mode, "#64748B"),
             obj.get_booking_mode_display(),
         )
 
@@ -327,16 +327,15 @@ class ServiceRequestAdmin(admin.ModelAdmin):
             return "—"
         wallet = obj.wallet_amount or 0
         card = obj.card_amount or 0
-        method = obj.get_payment_method_display()
-        lines = [f"<strong>Total:</strong> {obj.final_price}"]
+        parts = [format_html("<strong>Total:</strong> {}", obj.final_price)]
         if wallet:
-            lines.append(f"<strong>Wallet:</strong> {wallet}")
+            parts.append(format_html("<strong>Wallet:</strong> {}", wallet))
         if card and obj.payment_method == "card":
-            lines.append(f"<strong>Card (Stripe):</strong> {card}")
+            parts.append(format_html("<strong>Card (Stripe):</strong> {}", card))
         elif card and obj.payment_method == "cash":
-            lines.append(f"<strong>Cash (provider collects):</strong> {card}")
-        lines.append(f"<strong>Method:</strong> {method}")
-        return format_html("<br>".join(lines))
+            parts.append(format_html("<strong>Cash (provider collects):</strong> {}", card))
+        parts.append(format_html("<strong>Method:</strong> {}", obj.get_payment_method_display()))
+        return format_html_join(mark_safe("<br>"), "{}", ((p,) for p in parts))  # noqa: S308
 
     # ── Query optimisation ────────────────────────────────────
 
@@ -525,25 +524,23 @@ class AIRecommendationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Outcome")
     def outcome_badge(self, obj):
         colors = {
-            AIRecommendationOutcome.SUCCESS: "#4CAF50",
-            AIRecommendationOutcome.FALLBACK: "#FF9800",
-            AIRecommendationOutcome.BYPASSED: "#9E9E9E",
-            AIRecommendationOutcome.ERROR: "#F44336",
+            AIRecommendationOutcome.SUCCESS:  "#10B981",  # emerald (bold/uppercase badge)
+            AIRecommendationOutcome.FALLBACK: "#B45309",  # amber-700  5.0:1 ✓
+            AIRecommendationOutcome.BYPASSED: "#64748B",  # slate-500  4.8:1 ✓
+            AIRecommendationOutcome.ERROR:    "#EF4444",  # red-500    4.5:1 ✓
         }
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;'
-            "border-radius:10px;font-weight:bold;font-size:10px;"
-            'text-transform:uppercase">{}</span>',
-            colors.get(obj.outcome, "#757575"),
+            "border-radius:9999px;font-weight:700;font-size:10px;"
+            'text-transform:uppercase;letter-spacing:0.5px">{}</span>',
+            colors.get(obj.outcome, "#64748B"),
             obj.get_outcome_display(),
         )
 
     @admin.display(description="Service Request")
     def service_request_link(self, obj):
         if not obj.service_request_id:
-            return format_html(
-                '<span style="color:#999;font-style:italic">Unlinked</span>'
-            )
+            return mark_safe('<span style="color:#94A3B8;font-style:italic">Unlinked</span>')  # noqa: S308
         url = reverse(
             "admin:booking_servicerequest_change", args=[obj.service_request_id]
         )

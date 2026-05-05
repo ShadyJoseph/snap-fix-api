@@ -46,10 +46,12 @@ INSTALLED_APPS = [
     "apps.booking.apps.BookingConfig",
     "fcm_django",
     "apps.notifications.apps.NotificationsConfig",
-    "django_extensions",
     "django_celery_beat",
     "constance",
 ]
+
+if DEBUG:
+    INSTALLED_APPS += ["django_extensions"]
 
 FCM_DJANGO_SETTINGS = {
     "DEFAULT_FIREBASE_APP": None,  # uses the default app initialised at startup
@@ -127,6 +129,7 @@ if not DEBUG:
 # --- STATIC & MEDIA ---
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS = [BASE_DIR / "static"]
 # Whitenoise handles static file serving when DEBUG=False
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 

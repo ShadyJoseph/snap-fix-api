@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
-from django.utils.html import format_html
+from django.utils.html import format_html, mark_safe
 
 from .models import Staff
 
@@ -165,9 +165,9 @@ class StaffAdmin(UserAdmin):
             permissions.append("Analytics")
 
         if not permissions:
-            return format_html('<span style="color:gray">No permissions</span>')
+            return mark_safe('<span style="color:#64748B">No permissions</span>')  # noqa: S308
 
         return format_html(
-            '<span style="color:green">{}</span>',
+            '<span style="color:#10B981;font-weight:600">{}</span>',
             ", ".join(permissions),
         )

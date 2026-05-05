@@ -1,0 +1,73 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block title %}{% trans "Log in" %} | SnapFix Admin{% endblock %}
+
+{% block extrastyle %}
+{{ block.super }}
+{% endblock %}
+
+{% block bodyclass %}login{% endblock %}
+
+{% block userlinks %}{% endblock %}
+{% block nav_global %}{% endblock %}
+{% block nav_sidebar %}{% endblock %}
+
+{% block branding %}{% endblock %}
+
+{% block content_title %}{% endblock %}
+
+{% block content %}
+<div class="sf-login-wrap">
+
+  <div class="sf-login-card">
+
+    <div class="sf-login-logo">
+      <img src="{% static 'admin/img/logo.png' %}" alt="SnapFix">
+      <div class="sf-login-title">
+        <span class="sf-snap">Snap</span><span class="sf-fix">Fix</span>
+      </div>
+      <div class="sf-login-subtitle">{% trans "Administration" %}</div>
+    </div>
+
+    {% if form.errors and not form.non_field_errors %}
+    <p class="sf-form-error">{% trans "Your username and password didn't match. Please try again." %}</p>
+    {% endif %}
+
+    {% if form.non_field_errors %}
+    {% for error in form.non_field_errors %}
+    <p class="sf-form-error">{{ error }}</p>
+    {% endfor %}
+    {% endif %}
+
+    {% if next and user.is_authenticated %}
+    <p class="sf-form-error">{% trans "Your account doesn't have access to this page." %}</p>
+    {% endif %}
+
+    <form action="{{ app_path }}" method="post" id="login-form">
+      {% csrf_token %}
+
+      <div class="sf-field">
+        <label for="id_username">{% trans "Username" %}</label>
+        <input type="text" name="username" id="id_username"
+               autocomplete="username" autofocus required
+               value="{{ form.username.value|default:'' }}">
+      </div>
+
+      <div class="sf-field">
+        <label for="id_password">{% trans "Password" %}</label>
+        <input type="password" name="password" id="id_password"
+               autocomplete="current-password" required>
+      </div>
+
+      <input type="hidden" name="next" value="{{ next }}">
+
+      <button type="submit" class="sf-login-btn">
+        {% trans "Sign in" %}
+      </button>
+    </form>
+
+  </div>
+
+</div>
+{% endblock %}
