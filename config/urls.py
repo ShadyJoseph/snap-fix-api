@@ -126,21 +126,23 @@ def home(request):
 
 def api_root(request):
     base = request.build_absolute_uri("/api/v1/")
-    return JsonResponse({
-        "status": "ok",
-        "version": "v1",
-        "endpoints": {
-            "customers":     base + "customers/",
-            "providers":     base + "providers/",
-            "core": {
-                "categories": base + "core/categories/",
-                "regions":    base + "core/regions/",
-                "offices":    base + "core/offices/",
+    return JsonResponse(
+        {
+            "status": "ok",
+            "version": "v1",
+            "endpoints": {
+                "customers": base + "customers/",
+                "providers": base + "providers/",
+                "core": {
+                    "categories": base + "core/categories/",
+                    "regions": base + "core/regions/",
+                    "offices": base + "core/offices/",
+                },
+                "bookings": base + "bookings/",
+                "notifications": base + "notifications/",
             },
-            "bookings":      base + "bookings/",
-            "notifications": base + "notifications/",
-        },
-    })
+        }
+    )
 
 
 urlpatterns = [

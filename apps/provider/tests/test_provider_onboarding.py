@@ -334,6 +334,28 @@ class ProviderOnboardingModelTests(TestCase):
         self.assertEqual(provider.bio, app.bio)
         _ok("All onboarding fields synced onto provider after approval")
 
+    def test_approve_copies_nid_extracted_data_to_provider(self) -> None:
+        _section(
+            "2.7b - approve() persists the verified NID OCR data onto the provider"
+        )
+        provider = make_provider(email="nidkyc@test.com", active=False)
+        app = make_onboarding(self.region, self.category, applicant=provider)
+        app.nid_extracted_data = {
+            "nid_number": "30307020102112",
+            "dob_on_nid": "02/07/2003",
+        }
+        app.save(update_fields=["nid_extracted_data"])
+        app.move_to_review(self.staff)
+        app.refresh_from_db()
+        app.approve(self.staff)
+        provider.refresh_from_db()
+
+        self.assertEqual(
+            provider.nid_extracted_data.get("nid_number"), "30307020102112"
+        )
+        self.assertEqual(provider.nid_extracted_data.get("dob_on_nid"), "02/07/2003")
+        _ok("Verified NID data persisted onto the provider at approval")
+
     def test_approve_without_preregistration_raises(self) -> None:
         _section(
             "2.8 - approve() raises ValueError when no pre-registered account exists"

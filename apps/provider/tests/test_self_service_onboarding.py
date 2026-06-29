@@ -29,7 +29,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -912,7 +912,76 @@ class AdminNotificationHookTests(TestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 13. AI Validation Fallback Paths
+# 13. NID number → DOB decode (authoritative, deterministic)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+class NidDobDecodeTests(SimpleTestCase):
+    def test_decodes_2000s_and_1900s(self):
+        from datetime import date
+
+        from apps.provider.ai_validation import decode_nid_dob
+
+        self.assertEqual(decode_nid_dob("30307020102112"), date(2003, 7, 2))
+        self.assertEqual(decode_nid_dob("29512210101234"), date(1995, 12, 21))
+
+    def test_decodes_from_partial_number_via_leading_digits(self):
+        from datetime import date
+
+        from apps.provider.ai_validation import decode_nid_dob
+
+        # Only 11 of 14 digits read — the DOB lives in the leading 7.
+        self.assertEqual(decode_nid_dob("30307021213"), date(2003, 7, 2))
+        self.assertEqual(decode_nid_dob("3030702"), date(2003, 7, 2))
+
+    def test_decodes_arabic_indic_digits(self):
+        from datetime import date
+
+        from apps.provider.ai_validation import decode_nid_dob
+
+        # The model sometimes returns the number in Arabic-Indic numerals.
+        self.assertEqual(decode_nid_dob("٣٠٣٠٧٠٢٠١٠٢١١٢"), date(2003, 7, 2))
+
+    def test_rejects_serial_malformed_and_implausible(self):
+        from apps.provider.ai_validation import decode_nid_dob
+
+        for bad in (
+            "IW8931728",
+            "012345",
+            "",
+            None,
+            "abc",
+            "01012345678",
+            "203070210000",
+        ):
+            self.assertIsNone(decode_nid_dob(bad))
+
+    def test_enrichment_overwrites_dob_and_age_check(self):
+        from apps.provider.ai_validation import _apply_nid_dob_decode
+
+        report = {
+            "extracted_data": {
+                "nid_number": "30307020102112",
+                "dob_on_nid": "21/12/1995",
+            },
+            "age_check": {"consistent": True, "notes": "model read"},
+        }
+        _apply_nid_dob_decode(report, form_dob="02/07/2003")
+        self.assertEqual(report["extracted_data"]["dob_on_nid"], "02/07/2003")
+        self.assertTrue(report["age_check"]["consistent"])
+
+    def test_enrichment_noop_without_valid_number(self):
+        from apps.provider.ai_validation import _apply_nid_dob_decode
+
+        report = {
+            "extracted_data": {"nid_number": "IW8931728", "dob_on_nid": "21/12/1995"}
+        }
+        _apply_nid_dob_decode(report, form_dob="02/07/2003")
+        self.assertEqual(report["extracted_data"]["dob_on_nid"], "21/12/1995")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 14. AI Validation Fallback Paths
 # ═════════════════════════════════════════════════════════════════════════════
 
 

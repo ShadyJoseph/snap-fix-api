@@ -335,7 +335,7 @@ Fetch `GET /api/v1/notifications/` on app open and after each incoming push to k
 | `GOOGLE_APPLICATION_CREDENTIALS`      | Local `.env` / docker-compose secrets     | Path to the Firebase service-account JSON file (local dev) |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Railway → Variables                       | Full JSON content of the service-account file (production) |
 | `REDIS_URL`                           | Set automatically by Railway Redis plugin | Celery broker + result backend                             |
-| `ANTHROPIC_API_KEY`                   | Railway → Variables / `.env`              | Anthropic Claude Haiku — AI document validation + provider recommendations |
+| `ANTHROPIC_API_KEY`                   | Railway → Variables / `.env`              | Anthropic Claude — AI document validation (Opus) + provider recommendations (Haiku) |
 | `OPENAI_API_KEY`                      | Railway → Variables / `.env`              | OpenAI GPT-4o-mini — AI document validation + provider recommendations     |
 | `GROQ_API_KEY`                        | Railway → Variables / `.env`              | Groq Llama — AI document validation + provider recommendations             |
 | `GEMINI_API_KEY`                      | Railway → Variables / `.env`              | Google Gemini Flash — AI document validation + provider recommendations     |

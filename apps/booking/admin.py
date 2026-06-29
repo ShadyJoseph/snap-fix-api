@@ -259,12 +259,12 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     @admin.display(description="Status")
     def status_badge(self, obj):
         colors = {
-            ServiceRequestStatus.PENDING:     "#B45309",  # amber-700  5.0:1 ✓
-            ServiceRequestStatus.ASSIGNED:    "#2563EB",  # blue-600   4.7:1 ✓
-            ServiceRequestStatus.CONFIRMED:   "#0E7490",  # cyan-700   5.4:1 ✓
+            ServiceRequestStatus.PENDING: "#B45309",  # amber-700  5.0:1 ✓
+            ServiceRequestStatus.ASSIGNED: "#2563EB",  # blue-600   4.7:1 ✓
+            ServiceRequestStatus.CONFIRMED: "#0E7490",  # cyan-700   5.4:1 ✓
             ServiceRequestStatus.IN_PROGRESS: "#2563EB",  # blue-600   4.7:1 ✓
-            ServiceRequestStatus.COMPLETED:   "#10B981",  # emerald (bold/uppercase badge)
-            ServiceRequestStatus.CANCELLED:   "#EF4444",  # red-500    4.5:1 ✓
+            ServiceRequestStatus.COMPLETED: "#10B981",  # emerald (bold/uppercase badge)
+            ServiceRequestStatus.CANCELLED: "#EF4444",  # red-500    4.5:1 ✓
         }
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;border-radius:9999px;'
@@ -276,8 +276,8 @@ class ServiceRequestAdmin(admin.ModelAdmin):
     @admin.display(description="Mode")
     def booking_mode_badge(self, obj):
         colors = {
-            BookingMode.BROADCAST:   "#64748B",  # slate-500  4.8:1 ✓
-            BookingMode.DIRECT:      "#7C3AED",  # violet-700 5.8:1 ✓
+            BookingMode.BROADCAST: "#64748B",  # slate-500  4.8:1 ✓
+            BookingMode.DIRECT: "#7C3AED",  # violet-700 5.8:1 ✓
             BookingMode.RECOMMENDED: "#0E7490",  # cyan-700   5.4:1 ✓
         }
         return format_html(
@@ -333,8 +333,12 @@ class ServiceRequestAdmin(admin.ModelAdmin):
         if card and obj.payment_method == "card":
             parts.append(format_html("<strong>Card (Stripe):</strong> {}", card))
         elif card and obj.payment_method == "cash":
-            parts.append(format_html("<strong>Cash (provider collects):</strong> {}", card))
-        parts.append(format_html("<strong>Method:</strong> {}", obj.get_payment_method_display()))
+            parts.append(
+                format_html("<strong>Cash (provider collects):</strong> {}", card)
+            )
+        parts.append(
+            format_html("<strong>Method:</strong> {}", obj.get_payment_method_display())
+        )
         return format_html_join(mark_safe("<br>"), "{}", ((p,) for p in parts))  # noqa: S308
 
     # ── Query optimisation ────────────────────────────────────
@@ -524,10 +528,10 @@ class AIRecommendationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Outcome")
     def outcome_badge(self, obj):
         colors = {
-            AIRecommendationOutcome.SUCCESS:  "#10B981",  # emerald (bold/uppercase badge)
+            AIRecommendationOutcome.SUCCESS: "#10B981",  # emerald (bold/uppercase badge)
             AIRecommendationOutcome.FALLBACK: "#B45309",  # amber-700  5.0:1 ✓
             AIRecommendationOutcome.BYPASSED: "#64748B",  # slate-500  4.8:1 ✓
-            AIRecommendationOutcome.ERROR:    "#EF4444",  # red-500    4.5:1 ✓
+            AIRecommendationOutcome.ERROR: "#EF4444",  # red-500    4.5:1 ✓
         }
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;'
@@ -540,7 +544,9 @@ class AIRecommendationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Service Request")
     def service_request_link(self, obj):
         if not obj.service_request_id:
-            return mark_safe('<span style="color:#94A3B8;font-style:italic">Unlinked</span>')  # noqa: S308
+            return mark_safe(  # noqa: S308 — static, no user input
+                '<span style="color:#94A3B8;font-style:italic">Unlinked</span>'
+            )
         url = reverse(
             "admin:booking_servicerequest_change", args=[obj.service_request_id]
         )

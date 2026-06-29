@@ -61,6 +61,169 @@ def stamp_reviewer(obj: ProviderOnboarding, request_user: User) -> Staff | None:
     return reviewer
 
 
+# ── AI validation report rendering (shared by onboarding + log admins) ────────
+
+_NID_OCR_FIELDS = (
+    ("nid_number", "NID Number"),
+    ("name_on_nid", "Name on NID"),
+    ("dob_on_nid", "Date of Birth"),
+    ("address_on_nid", "Address"),
+    ("issue_date", "Issue Date"),
+    ("expiry_date", "Expiry Date"),
+)
+
+_DOC_CHECK_LABELS = {
+    "nid_front": "NID Front",
+    "nid_back": "NID Back",
+    "police_clearance": "Police Clearance",
+    "professional_cert": "Professional Certificate",
+}
+
+
+def render_extracted_nid(data: dict) -> str:
+    """Render the OCR-extracted NID fields as a small table, or '' if empty."""
+    if not isinstance(data, dict) or not any(data.get(k) for k, _ in _NID_OCR_FIELDS):
+        return ""
+    rows = format_html_join(
+        "",
+        '<tr><td style="padding:3px 10px 3px 0;color:#475569;font-weight:600">{}</td>'
+        '<td style="padding:3px 8px;font-family:monospace;color:#0F172A">{}</td></tr>',
+        ((label, data.get(key)) for key, label in _NID_OCR_FIELDS if data.get(key)),
+    )
+    return format_html(
+        '<div style="margin-top:10px">'
+        '<strong style="color:#2563EB">Extracted NID data (OCR)</strong>'
+        '<table style="margin-top:4px;border-collapse:collapse">{}</table></div>',
+        rows,
+    )
+
+
+def render_doc_checks(doc_checks: dict) -> str:
+    """Render the per-document validity table, or '' if there is nothing to show."""
+    rows = []
+    for key, label in _DOC_CHECK_LABELS.items():
+        check = doc_checks.get(key, {})
+        if not isinstance(check, dict):
+            continue
+        valid = check.get("valid")
+        icon, color = {
+            True: ("✔", "#10B981"),
+            False: ("✘", "#EF4444"),
+        }.get(valid, ("—", "#64748B"))
+        rows.append(
+            format_html(
+                '<tr><td style="padding:4px 8px;font-weight:bold">{}</td>'
+                '<td style="padding:4px 8px;color:{};font-weight:bold">{}</td>'
+                '<td style="padding:4px 8px;color:#64748B">{}</td></tr>',
+                label,
+                color,
+                icon,
+                check.get("notes", ""),
+            )
+        )
+    if not rows:
+        return ""
+    return format_html(
+        '<table style="margin-top:8px;border-collapse:collapse;width:100%">'
+        '<thead><tr style="background:#F1F5F9">'
+        '<th style="padding:4px 8px;text-align:left">Document</th>'
+        '<th style="padding:4px 8px;text-align:left">Status</th>'
+        '<th style="padding:4px 8px;text-align:left">Notes</th>'
+        "</tr></thead><tbody>{}</tbody></table>",
+        mark_safe("".join(rows)),  # noqa: S308 — each row is escaped by format_html
+    )
+
+
+def render_validation_body(report: dict) -> str:
+    """Shared body of a validation report: confidence, issues, extracted NID,
+    age check, and document checks. Excludes the status badge (caller adds it)."""
+    if not report:
+        return format_html(
+            '<p style="color:#64748B;margin-top:8px">No report available yet.</p>'
+        )
+
+    parts = []
+    confidence = report.get("overall_confidence")
+    if isinstance(confidence, int | float):
+        parts.append(
+            format_html(
+                '<p style="margin:6px 0"><strong>Confidence:</strong> {}</p>',
+                f"{confidence:.0%}",
+            )
+        )
+
+    issues = report.get("issues") or []
+    if issues:
+        items = format_html_join("", "<li>{}</li>", ((issue,) for issue in issues))
+        parts.append(
+            format_html(
+                '<div style="margin-top:8px">'
+                '<strong style="color:#EF4444">Issues found:</strong>'
+                '<ul style="margin:4px 0 0 16px">{}</ul></div>',
+                items,
+            )
+        )
+
+    parts.append(render_extracted_nid(report.get("extracted_data") or {}))
+
+    # Consistency checks — name match, age, and cross-document identity. A false
+    # value renders red so identity red flags are never visually understated.
+    check_specs = (
+        ("Name match (NID vs form)", report.get("name_match"), "consistent"),
+        ("Age check (NID vs form)", report.get("age_check"), "consistent"),
+        (
+            "Same person across all docs",
+            report.get("identity_consistency"),
+            "same_person",
+        ),
+    )
+    check_lines = []
+    for label, data, key in check_specs:
+        if not isinstance(data, dict) or not data.get("notes"):
+            continue
+        value = data.get(key)
+        icon, color = {
+            True: ("✔", "#10B981"),
+            False: ("✘", "#EF4444"),
+        }.get(value, ("—", "#64748B"))
+        check_lines.append(
+            format_html(
+                '<p style="margin:4px 0"><strong>{}:</strong> '
+                '<span style="color:{};font-weight:600">{}</span> '
+                '<span style="color:#475569">{}</span></p>',
+                label,
+                color,
+                icon,
+                data["notes"],
+            )
+        )
+    if check_lines:
+        parts.append(
+            format_html(
+                '<div style="margin-top:8px">{}</div>',
+                mark_safe("".join(check_lines)),  # noqa: S308 — each line is escaped by format_html
+            )
+        )
+
+    parts.append(render_doc_checks(report.get("document_checks") or {}))
+    return mark_safe("".join(parts))  # noqa: S308 — parts are all escaped SafeStrings
+
+
+def render_json_block(value) -> str:
+    """Pretty-print a JSON-serialisable value in a scrollable <pre> for debugging."""
+    import json
+
+    try:
+        text = json.dumps(value, indent=2, ensure_ascii=False, sort_keys=False)
+    except (TypeError, ValueError):
+        text = str(value)
+    return format_html(
+        '<pre style="background:#0F172A;color:#E2E8F0;padding:12px;border-radius:8px;'
+        'overflow:auto;max-height:420px;font-size:12px;line-height:1.5;margin:0">{}</pre>',
+        text,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider Admin
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,7 +243,14 @@ class ProviderAdmin(admin.ModelAdmin):
         "date_joined",
     )
     list_filter = ("verification_status", "is_available", "is_active", "region")
-    search_fields = ("email", "first_name", "last_name", "business_name", "phone")
+    search_fields = (
+        "email",
+        "first_name",
+        "last_name",
+        "business_name",
+        "phone",
+        "nid_extracted_data__nid_number",
+    )
     readonly_fields = (
         "date_joined",
         "last_login",
@@ -96,6 +266,7 @@ class ProviderAdmin(admin.ModelAdmin):
         "acceptance_rate_display",
         "verification_status",
         "is_verified",
+        "nid_data_display",
     )
     filter_horizontal = ("categories",)
     actions = ["make_available", "make_unavailable"]
@@ -151,6 +322,13 @@ class ProviderAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Verified Identity (NID)",
+            {
+                "fields": ("nid_data_display",),
+                "description": "OCR data captured from the approved onboarding's AI validation.",
+            },
+        ),
+        (
             "Timestamps",
             {
                 "fields": ("date_joined", "last_login", "updated_at"),
@@ -173,7 +351,7 @@ class ProviderAdmin(admin.ModelAdmin):
     @admin.display(description="Verification")
     def verification_badge(self, obj: Provider) -> str:
         colors = {
-            ProviderVerificationStatus.PENDING:  "#B45309",  # amber-700  5.0:1 on white
+            ProviderVerificationStatus.PENDING: "#B45309",  # amber-700  5.0:1 on white
             ProviderVerificationStatus.VERIFIED: "#047857",  # emerald-700 5.5:1 on white
             ProviderVerificationStatus.REJECTED: "#DC2626",  # red-600    5.5:1 on white
         }
@@ -181,6 +359,13 @@ class ProviderAdmin(admin.ModelAdmin):
             '<span style="color:{};font-weight:bold">{}</span>',
             colors.get(obj.verification_status, "gray"),
             obj.get_verification_status_display(),
+        )
+
+    @admin.display(description="Verified NID data")
+    def nid_data_display(self, obj: Provider) -> str:
+        body = render_extracted_nid(obj.nid_extracted_data or {})
+        return body or mark_safe(  # noqa: S308 — static string
+            '<span style="color:#64748B">No NID data captured.</span>'
         )
 
     @admin.display(description="Completion Rate")
@@ -339,12 +524,25 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         "category",
         "region",
         "status_badge",
+        "ai_status_badge",
         "age",
         "hourly_rate",
         "submitted_at",
     )
-    list_filter = ("status", "category", "region", "submitted_at")
-    search_fields = ("first_name", "last_name", "email", "phone")
+    list_filter = (
+        "status",
+        "ai_validation_status",
+        "category",
+        "region",
+        "submitted_at",
+    )
+    search_fields = (
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "nid_extracted_data__nid_number",
+    )
     actions = ["action_move_to_review", "action_approve", "action_reject"]
 
     def get_readonly_fields(self, request, obj=None):
@@ -490,19 +688,21 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
     @admin.display(description="Applicant")
     def applicant_link(self, obj: ProviderOnboarding) -> str:
         if not obj.applicant_id:
-            return mark_safe('<span style="color:#94A3B8;font-style:italic">Not linked</span>')  # noqa: S308
+            return mark_safe(  # noqa: S308 — static, no user input
+                '<span style="color:#94A3B8;font-style:italic">Not linked</span>'
+            )
         url = reverse("admin:provider_provider_change", args=[obj.applicant_id])
         return format_html('<a href="{}">{}</a>', url, obj.applicant.get_full_name())
 
     @admin.display(description="Status")
     def status_badge(self, obj: ProviderOnboarding) -> str:
         colors = {
-            OnboardingStatus.DRAFT:             "#64748B",  # slate-500   4.8:1 ✓
-            OnboardingStatus.PENDING:           "#B45309",  # amber-700   5.0:1 ✓
-            OnboardingStatus.UNDER_REVIEW:      "#2563EB",  # blue-600    4.7:1 ✓
-            OnboardingStatus.CHANGES_REQUIRED:  "#B45309",  # amber-700   5.0:1 ✓
-            OnboardingStatus.APPROVED:          "#10B981",  # emerald-500 (bold badge)
-            OnboardingStatus.REJECTED:          "#EF4444",  # red-500     4.5:1 ✓
+            OnboardingStatus.DRAFT: "#64748B",  # slate-500   4.8:1 ✓
+            OnboardingStatus.PENDING: "#B45309",  # amber-700   5.0:1 ✓
+            OnboardingStatus.UNDER_REVIEW: "#2563EB",  # blue-600    4.7:1 ✓
+            OnboardingStatus.CHANGES_REQUIRED: "#B45309",  # amber-700   5.0:1 ✓
+            OnboardingStatus.APPROVED: "#10B981",  # emerald-500 (bold badge)
+            OnboardingStatus.REJECTED: "#EF4444",  # red-500     4.5:1 ✓
         }
         return format_html(
             '<span style="background:{};color:white;padding:3px 10px;'
@@ -510,6 +710,23 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             'text-transform:uppercase;letter-spacing:0.5px">{}</span>',
             colors.get(obj.status, "#64748B"),
             obj.get_status_display(),
+        )
+
+    @admin.display(description="AI Check")
+    def ai_status_badge(self, obj: ProviderOnboarding) -> str:
+        colors = {
+            AIValidationStatus.PENDING: "#64748B",
+            AIValidationStatus.RUNNING: "#2563EB",
+            AIValidationStatus.PASSED: "#10B981",
+            AIValidationStatus.FLAGGED: "#B45309",
+            AIValidationStatus.FAILED: "#EF4444",
+        }
+        return format_html(
+            '<span style="background:{};color:white;padding:3px 10px;'
+            "border-radius:9999px;font-weight:700;font-size:10px;"
+            'text-transform:uppercase;letter-spacing:0.5px">{}</span>',
+            colors.get(obj.ai_validation_status, "#64748B"),
+            obj.get_ai_validation_status_display(),
         )
 
     @admin.display(description="Provider Account")
@@ -522,7 +739,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
                 "View Provider Account</a>",
                 url,
             )
-        return mark_safe('<span style="color:#94A3B8;font-style:italic">Not created yet</span>')  # noqa: S308
+        return mark_safe(  # noqa: S308 — static, no user input
+            '<span style="color:#94A3B8;font-style:italic">Not created yet</span>'
+        )
 
     @admin.display(description="Documents")
     def document_preview(self, obj: ProviderOnboarding) -> str:
@@ -586,9 +805,9 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
         status_colors = {
             AIValidationStatus.PENDING: ("#64748B", "Pending"),
             AIValidationStatus.RUNNING: ("#2563EB", "Running…"),
-            AIValidationStatus.PASSED:  ("#10B981", "Passed"),
+            AIValidationStatus.PASSED: ("#10B981", "Passed"),
             AIValidationStatus.FLAGGED: ("#B45309", "Flagged — Needs Review"),
-            AIValidationStatus.FAILED:  ("#EF4444", "Failed"),
+            AIValidationStatus.FAILED: ("#EF4444", "Failed"),
         }
         color, label = status_colors.get(ai_status, ("#64748B", ai_status))
 
@@ -600,101 +819,10 @@ class ProviderOnboardingAdmin(admin.ModelAdmin):
             label,
         )
 
-        if not report:
-            return format_html(
-                '{}<p style="color:#64748B;margin-top:8px">No report available yet.</p>',
-                badge,
-            )
-
-        confidence = report.get("overall_confidence")
-        confidence_html = (
-            format_html(
-                '<p style="margin:6px 0"><strong>Confidence:</strong> {:.0%}</p>',
-                confidence,
-            )
-            if confidence is not None
-            else ""
-        )
-
-        issues = report.get("issues", [])
-        issues_html = ""
-        if issues:
-            items = format_html_join("", "<li>{}</li>", ((issue,) for issue in issues))
-            issues_html = format_html(
-                '<div style="margin-top:8px">'
-                '<strong style="color:#EF4444">Issues found:</strong>'
-                '<ul style="margin:4px 0 0 16px">{}</ul></div>',
-                items,
-            )
-
-        doc_checks = report.get("document_checks", {})
-        doc_rows = []
-        doc_labels_map = {
-            "nid_front": "NID Front",
-            "nid_back": "NID Back",
-            "police_clearance": "Police Clearance",
-            "professional_cert": "Professional Certificate",
-        }
-        for key, label_text in doc_labels_map.items():
-            check = doc_checks.get(key, {})
-            if not isinstance(check, dict):
-                continue
-            valid = check.get("valid")
-            notes = check.get("notes", "")
-            if valid is True:
-                icon, icon_color = "✔", "#10B981"
-            elif valid is False:
-                icon, icon_color = "✘", "#EF4444"
-            else:
-                icon, icon_color = "—", "#64748B"
-            doc_rows.append(
-                format_html(
-                    "<tr>"
-                    '<td style="padding:4px 8px;font-weight:bold">{}</td>'
-                    '<td style="padding:4px 8px;color:{};font-weight:bold">{}</td>'
-                    '<td style="padding:4px 8px;color:#64748B">{}</td>'
-                    "</tr>",
-                    label_text,
-                    icon_color,
-                    icon,
-                    notes,
-                )
-            )
-
-        docs_table = ""
-        if doc_rows:
-            docs_table = format_html(
-                '<table style="margin-top:8px;border-collapse:collapse;width:100%">'
-                '<thead><tr style="background:#F1F5F9">'
-                '<th style="padding:4px 8px;text-align:left">Document</th>'
-                '<th style="padding:4px 8px;text-align:left">Status</th>'
-                '<th style="padding:4px 8px;text-align:left">Notes</th>'
-                "</tr></thead><tbody>{}</tbody></table>",
-                mark_safe("".join(doc_rows)),  # noqa: S308
-            )
-
-        age_check = report.get("age_check", {})
-        age_html = ""
-        if isinstance(age_check, dict) and age_check.get("notes"):
-            age_icon = "✔" if age_check.get("consistent") else "✘"
-            age_color = "#10B981" if age_check.get("consistent") else "#EF4444"
-            age_html = format_html(
-                '<p style="margin-top:8px">'
-                "<strong>Age check:</strong> "
-                '<span style="color:{}">{} {}</span>'
-                "</p>",
-                age_color,
-                age_icon,
-                age_check["notes"],
-            )
-
         return format_html(
-            '<div style="padding:8px">{}{}{}{}{}</div>',
+            '<div style="padding:8px">{}{}</div>',
             badge,
-            confidence_html,
-            issues_html,
-            age_html,
-            docs_table,
+            render_validation_body(report),
         )
 
     # ── Save with FSM enforcement ─────────────────────────────────────────────
@@ -955,6 +1083,7 @@ class AIValidationLogAdmin(admin.ModelAdmin):
         "applicant_snapshot__full_name",
         "applicant_snapshot__phone",
         "onboarding__email",
+        "parsed_report__extracted_data__nid_number",
     )
     date_hierarchy = "triggered_at"
     ordering = ["-triggered_at"]
@@ -964,15 +1093,16 @@ class AIValidationLogAdmin(admin.ModelAdmin):
         "triggered_at",
         "onboarding_link",
         "outcome_badge",
+        "report_summary",
         "applicant_snapshot",
         "documents_sent",
         "model_id",
         "latency_ms",
         "input_tokens",
         "output_tokens",
-        "raw_response",
-        "parsed_report",
         "error_message",
+        "parsed_report_pretty",
+        "raw_response_pretty",
     )
 
     fieldsets = (
@@ -988,6 +1118,13 @@ class AIValidationLogAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Validation summary",
+            {
+                "fields": ("report_summary",),
+                "description": "Human-readable view of the parsed report — start here.",
+            },
+        ),
+        (
             "Input",
             {
                 "fields": ("applicant_snapshot", "documents_sent"),
@@ -1000,9 +1137,18 @@ class AIValidationLogAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Response",
+            "Error",
             {
-                "fields": ("parsed_report", "raw_response", "error_message"),
+                "fields": ("error_message",),
+                "description": "Populated only when the outcome is 'error'.",
+            },
+        ),
+        (
+            "Debug (raw JSON)",
+            {
+                "fields": ("parsed_report_pretty", "raw_response_pretty"),
+                "classes": ("collapse",),
+                "description": "Expand to inspect the exact parsed report and model output.",
             },
         ),
     )
@@ -1028,7 +1174,9 @@ class AIValidationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Onboarding")
     def onboarding_link(self, obj: AIValidationLog) -> str:
         if not obj.onboarding_id:
-            return mark_safe('<span style="color:#94A3B8;font-style:italic">Deleted</span>')  # noqa: S308
+            return mark_safe(  # noqa: S308 — static, no user input
+                '<span style="color:#94A3B8;font-style:italic">Deleted</span>'
+            )
         url = reverse(
             "admin:provider_provideronboarding_change", args=[obj.onboarding_id]
         )
@@ -1040,11 +1188,11 @@ class AIValidationLogAdmin(admin.ModelAdmin):
     @admin.display(description="Outcome")
     def outcome_badge(self, obj: AIValidationLog) -> str:
         colors = {
-            "passed":   "#10B981",  # bold badge, widely accepted
-            "flagged":  "#B45309",  # amber-700  5.0:1 ✓
-            "failed":   "#EF4444",  # red-500    4.5:1 ✓
+            "passed": "#10B981",  # bold badge, widely accepted
+            "flagged": "#B45309",  # amber-700  5.0:1 ✓
+            "failed": "#EF4444",  # red-500    4.5:1 ✓
             "bypassed": "#64748B",  # slate-500  4.8:1 ✓
-            "error":    "#7C3AED",  # violet-700 5.8:1 ✓
+            "error": "#7C3AED",  # violet-700 5.8:1 ✓
         }
         color = colors.get(obj.outcome, "#64748B")
         return format_html(
@@ -1068,3 +1216,26 @@ class AIValidationLogAdmin(admin.ModelAdmin):
         if total is None:
             return "—"
         return f"{total:,}"
+
+    @admin.display(description="Validation summary")
+    def report_summary(self, obj: AIValidationLog) -> str:
+        return format_html(
+            '<div style="padding:8px">{}{}</div>',
+            self.outcome_badge(obj),
+            render_validation_body(obj.parsed_report or {}),
+        )
+
+    @admin.display(description="Parsed report (JSON)")
+    def parsed_report_pretty(self, obj: AIValidationLog) -> str:
+        return render_json_block(obj.parsed_report or {})
+
+    @admin.display(description="Raw model response")
+    def raw_response_pretty(self, obj: AIValidationLog) -> str:
+        if not obj.raw_response:
+            return mark_safe('<span style="color:#64748B">—</span>')  # noqa: S308
+        return format_html(
+            '<pre style="background:#0F172A;color:#E2E8F0;padding:12px;border-radius:8px;'
+            "overflow:auto;max-height:420px;font-size:12px;line-height:1.5;margin:0;"
+            'white-space:pre-wrap;word-break:break-word">{}</pre>',
+            obj.raw_response,
+        )

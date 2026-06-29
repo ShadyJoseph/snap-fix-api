@@ -119,6 +119,11 @@ Set these environment variables on the web service:
 | `CSRF_TRUSTED_ORIGINS` | `https://snap-fix-api.up.railway.app` |
 | `GOOGLE_APPLICATION_CREDENTIALS_JSON` | Full contents of `firebase-service-account.json` (paste the entire JSON) |
 
+> **No demo seeding in production.** The `seed_data` command is a local-only
+> convenience wired into `docker-compose` (via `SEED_DEMO_DATA=true`). The
+> production `Dockerfile` entrypoint deliberately does **not** run it — never
+> auto-seed a database holding real data.
+
 ### 4. Deploy the Celery service
 
 Create a second Railway service pointing at the **same GitHub repo**. Override the start command:

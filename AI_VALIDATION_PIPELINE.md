@@ -129,6 +129,8 @@ doc_labels = {
 
 MIME detection uses `mimetypes.guess_type`. Unknown types are treated as `image/jpeg` so vision models can still attempt to read them.
 
+**Image orientation & size:** image bytes are normalized by `_normalize_image()` before encoding — EXIF orientation is baked into the pixels (`ImageOps.exif_transpose`) and the longest edge is capped at 2000 px, then re-encoded as JPEG. This fixes phone photos whose rotation lives only in an EXIF tag (the model sees raw pixels, not the tag) and trims image tokens. Photos with **no** EXIF tag can still be physically rotated (e.g. a landscape ID card shot in a portrait frame); the model is instructed in the system prompt to mentally rotate and read such images and to never flag orientation itself as a defect. PDFs are passed through untouched.
+
 ### Step 3 — Provider selection
 
 `AI_VALIDATION_PROVIDER` (Constance) controls which API is used:
@@ -161,10 +163,16 @@ def _call_<provider>(system, text, docs) -> (report_dict, raw_str, latency_ms, i
 
 | Provider | Model | PDF support |
 |----------|-------|-------------|
-| Anthropic | `claude-haiku-4-5-20251001` | Yes — `document` content block |
+| Anthropic | `claude-opus-4-8` | Yes — `document` content block |
 | OpenAI | `gpt-4o-mini` | No — sends a text note instead of inline PDF |
 | Gemini | `gemini-2.0-flash` | Yes — `inline_data` with `mime_type=application/pdf` |
 | Groq | `meta-llama/llama-4-scout-17b-16e-instruct` | No — same as OpenAI |
+
+Anthropic is the default first provider and uses **Opus** (`claude-opus-4-8`) — the
+most accurate model at reading small/degraded ID text (Arabic-Indic digits, the
+two-line NID name). Identity validation is low-volume and asynchronous, so the
+accuracy is worth the higher per-call cost; tune `_ANTHROPIC_MODEL` in
+`ai_validation.py` to trade accuracy for cost.
 
 **PDF handling:** Anthropic and Gemini receive PDFs natively. OpenAI and Groq receive a text note: `"(application/pdf document was provided but cannot be visually inspected by this model)"` so they can still reason about what was submitted even without seeing it.
 
@@ -214,13 +222,52 @@ Documents provided: [list of labels and whether each was provided]
     "police_clearance": {"valid": true|false|null, "notes": "..."},
     "professional_cert":{"valid": true|false|null, "notes": "..."}
   },
-  "age_check":   {"consistent": true|false|null, "notes": "..."},
+  "extracted_data": {
+    "nid_number":     "14-digit number or null",
+    "name_on_nid":    "FULL name across both lines (own name first), Arabic, or null",
+    "dob_on_nid":     "DD/MM/YYYY or null",
+    "address_on_nid": "address text or null",
+    "issue_date":     "DD/MM/YYYY or null",
+    "expiry_date":    "DD/MM/YYYY or null"
+  },
+  "name_match":           {"consistent": true|false|null, "notes": "NID name vs form name"},
+  "age_check":            {"consistent": true|false|null, "notes": "NID DOB vs form DOB"},
+  "identity_consistency": {"same_person": true|false|null, "notes": "same individual across all docs?"},
   "issues":      ["..."],
   "overall_confidence": 0.0
 }
 ```
 
+`name_match`, `age_check`, and `identity_consistency` are scored as identity red
+flags: a `false` on any of them forces at least `flagged` (never `passed`), so a
+borrowed/forged ID or a name/DOB mismatch can't slip through as a clean pass.
+
+**Egyptian name handling:** Egyptian full names are a chain (`own · father ·
+grandfather · family`) printed across two lines on the NID. The prompt instructs
+the model to read **both** lines and start at the applicant's own first name —
+otherwise it drops the first name and mistakes the father's name for the
+applicant's.
+
 `null` means the model couldn't determine validity (blurry, not provided, etc.) — distinct from `false` (definitely invalid).
+
+**`extracted_data`** is a faithful OCR transcription of the NID — real applicant
+data the platform keeps, not just debug output. The full report (including
+`extracted_data`) is stored on `ProviderOnboarding.ai_validation_report`, and the
+OCR block is **also** copied to the dedicated `ProviderOnboarding.nid_extracted_data`
+field so it stays queryable (e.g. search an applicant by NID number in the admin).
+On **approval**, `ProviderOnboarding.approve()` copies that block onto
+`Provider.nid_extracted_data`, so the verified identity record lives on the
+provider account (shown read-only in the Provider admin, searchable by NID number).
+
+**Deterministic DOB.** The Egyptian national ID number encodes the date of birth
+in its **first 7 digits** (digit 1 = century, digits 2–7 = `YYMMDD`). Rather than
+trust the model to read the printed date, `decode_nid_dob()` derives the DOB from
+those leading digits in code — it tolerates a partially-read number (e.g. 11 of 14
+digits) since the DOB sits at the start, and rejects implausible results. Then
+`_apply_nid_dob_decode()` writes the decoded value into `dob_on_nid` and recomputes
+the age check against the form DOB, removing a whole class of date-misreads. (The
+model is also told `nid_number` is the national number — *not* the short card
+serial like `IW…` — and to read it left-to-right from the first digit.)
 
 ---
 
@@ -297,7 +344,7 @@ Every call — including bypasses and errors — writes an immutable log row:
 | `raw_response` | Raw text from the model before JSON parsing |
 | `parsed_report` | The final status-enriched report |
 | `error_message` | Exception text when `outcome=error` |
-| `model_id` | Which model was used (e.g. `claude-haiku-4-5-20251001`) |
+| `model_id` | Which model was used (e.g. `claude-opus-4-8`) |
 | `latency_ms` | Wall-clock time of the API call |
 | `input_tokens` / `output_tokens` | Token usage for cost tracking |
 
@@ -326,6 +373,25 @@ All tuneable settings are in Django Admin → **Constance → Change** — no re
 **Operational tips:**
 - Set `AI_VALIDATION_ENABLED = False` during load tests or when all AI APIs are degraded — applications still queue normally for staff review.
 - Set `AI_VALIDATION_PROVIDER = "anthropic"` to pin to a single provider and avoid cascading latency when debugging.
+
+**Real end-to-end smoke test:** `scripts/e2e_onboarding.py` builds a throwaway
+onboarding from the local `test-data/` document images and runs the real
+`validate_onboarding()` pipeline (real API call, real OCR). It prints a detailed
+report — form-vs-card comparison, name/age/identity consistency, extracted NID
+data, per-document checks, issues, and model/token/latency metadata — then deletes
+the throwaway data. It is a **standalone dev script, not a management command**, so
+it is never part of the shipped command surface or a deploy entrypoint. Run it in
+the stack so the keys and Constance are available:
+
+```bash
+make e2e-onboarding                                  # cascade (all)
+make e2e-onboarding provider=anthropic               # pin one provider
+make e2e-onboarding provider=anthropic args="--keep" # keep the record for the admin
+docker compose exec web python scripts/e2e_onboarding.py --name "Wrong Name" --dob 01/01/2010 --keep
+```
+
+It reads API keys from the environment and document images from `test-data/`
+(gitignored — supply your own). Spends real API tokens.
 
 ---
 

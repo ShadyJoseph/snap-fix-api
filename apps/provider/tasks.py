@@ -116,7 +116,15 @@ def validate_onboarding_documents(self, onboarding_id: str) -> None:
         raw_status, AIValidationStatus.FLAGGED
     )
     onboarding.ai_validation_report = report
-    onboarding.save(update_fields=["ai_validation_status", "ai_validation_report"])
+    extracted = report.get("extracted_data")
+    onboarding.nid_extracted_data = extracted if isinstance(extracted, dict) else {}
+    onboarding.save(
+        update_fields=[
+            "ai_validation_status",
+            "ai_validation_report",
+            "nid_extracted_data",
+        ]
+    )
 
     logger.info(
         "validate_onboarding_documents: %s → %s (confidence=%.2f)",

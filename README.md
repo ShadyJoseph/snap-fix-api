@@ -73,6 +73,8 @@ make logs            # Follow container logs
 make migrate         # Apply migrations
 make makemigrations  # Create new migrations
 make superuser       # Create superuser manually
+make seed            # Seed demo data for local testing (additive)
+make seed-fresh      # Wipe previous demo data, then re-seed
 make shell           # Open Django shell (shell_plus + IPython)
 make bash            # Open container bash
 ```
@@ -166,6 +168,45 @@ img = make_image("photo.png")
 | `make_review(sr, customer, provider, **kwargs)`                          | `Review`                          |
 | `make_onboarding(region, category, applicant, **kwargs)`                 | `ProviderOnboarding`              |
 | `scaffold()`                                                             | All of the above, linked together |
+
+---
+
+## Seeding Demo Data
+
+For a populated database to click through in the admin/app (rather than building
+objects by hand in the shell), use the `seed_data` management command. It is
+built on top of the same `factories.py` helpers, so the seeded shapes match the
+test suite. It creates regions, categories, customers, providers, service
+requests across every lifecycle state (with reviews and **attached photos**), and
+pending onboarding applications with document images.
+
+```bash
+make seed                              # idempotent: tops up toward target counts
+make seed-fresh                        # clear previous demo data, then re-seed
+
+# Tune the volume / behaviour directly:
+docker compose exec web python manage.py seed_data --customers 10 --providers 15 --requests 40
+docker compose exec web python manage.py seed_data --clear   # wipe demo data first
+```
+
+The command is **idempotent** — accounts use deterministic `@demo.local` emails
+(get-or-create) and requests are topped up to the target rather than duplicated —
+so it is safe to run repeatedly. Document and photo images come from the committed
+`apps/core/seed_assets/` folder (these are placeholder images, distinct from the
+gitignored `test-data/` OCR fixtures).
+
+**Local auto-seed:** set `SEED_DEMO_DATA=true` in your `.env` and the
+docker-compose web service runs `seed_data --force` on startup. This is wired into
+docker-compose only — production never auto-seeds. Everything created is tagged
+with the `@demo.local` email domain so `--clear` removes it again without touching
+real data. The command refuses to run when `DEBUG=False` unless you pass
+`--force`. Fixed login accounts (password `testpass123`):
+
+| Account                | Role                  |
+| ---------------------- | --------------------- |
+| `admin@demo.local`     | superuser / staff     |
+| `customer@demo.local`  | customer              |
+| `provider@demo.local`  | verified provider     |
 
 ---
 

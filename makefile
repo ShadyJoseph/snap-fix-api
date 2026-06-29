@@ -1,4 +1,5 @@
-.PHONY: up upd down down-v logs migrate makemigrations superuser shell bash \
+.PHONY: up upd down down-v logs migrate makemigrations superuser seed seed-fresh \
+        e2e-onboarding shell bash \
         test test-app test-class test-v \
         lint format security fix clean
 
@@ -32,6 +33,21 @@ makemigrations:
 
 superuser:
 	$(MANAGE) createsuperuser
+
+seed:
+	$(MANAGE) seed_data
+
+seed-fresh:
+	$(MANAGE) seed_data --clear
+
+# Real end-to-end AI validation against the local test-data/ documents.
+# It is a standalone dev script (not a management command), so it is never part
+# of the shipped command surface.
+#   make e2e-onboarding provider=anthropic
+#   make e2e-onboarding provider=anthropic args="--keep"
+# (extra flags like --keep must go through args= — make does not forward bare --flags)
+e2e-onboarding:
+	$(DC) exec web python scripts/e2e_onboarding.py $(if $(provider),--provider $(provider),) $(args)
 
 shell:
 	$(MANAGE) shell_plus --ipython

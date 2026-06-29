@@ -19,7 +19,7 @@ services:
 
   web:
     build: .
-    command: sh -c "until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120 --reload --reload-engine poll"
+    command: sh -c "until python manage.py migrate --noinput; do echo 'Waiting for DB...'; sleep 2; done && python manage.py create_superuser && if [ \"$$SEED_DEMO_DATA\" = \"true\" ]; then python manage.py seed_data --force; fi && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120 --reload --reload-engine poll"
     ports:
       - "8000:8000"
     volumes:

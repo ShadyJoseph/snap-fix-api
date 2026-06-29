@@ -91,6 +91,14 @@ class Provider(User):
         validators=[MinValueValidator(0)],
     )
     total_reviews = models.IntegerField(default=0, validators=[MinValueValidator(0)])
+    nid_extracted_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "NID OCR fields captured from the AI validation at approval time "
+            "(copied from the onboarding application). Verified identity record."
+        ),
+    )
 
     class Meta:
         db_table = "providers"
@@ -278,6 +286,15 @@ class ProviderOnboarding(models.Model):
         db_index=True,
     )
     ai_validation_report = models.JSONField(default=dict, blank=True)
+    nid_extracted_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "OCR fields transcribed from the National ID by AI validation "
+            "(nid_number, name_on_nid, dob_on_nid, address_on_nid, issue_date, "
+            "expiry_date). Stored separately so it stays queryable."
+        ),
+    )
 
     # Resubmission cooldown — set to rejected_at + 30 days on rejection
     can_resubmit_after = models.DateTimeField(null=True, blank=True)
@@ -453,6 +470,8 @@ class ProviderOnboarding(models.Model):
         provider.hourly_rate = self.hourly_rate
         provider.years_of_experience = self.years_of_experience
         provider.bio = self.bio
+        # Persist the verified NID OCR data onto the provider as a KYC record.
+        provider.nid_extracted_data = self.nid_extracted_data or {}
         provider.save(
             update_fields=[
                 "is_active",
@@ -466,6 +485,7 @@ class ProviderOnboarding(models.Model):
                 "hourly_rate",
                 "years_of_experience",
                 "bio",
+                "nid_extracted_data",
             ]
         )
         provider.categories.add(self.category)
@@ -505,6 +525,7 @@ class ProviderOnboarding(models.Model):
         self.can_resubmit_after = None
         self.ai_validation_status = AIValidationStatus.PENDING
         self.ai_validation_report = {}
+        self.nid_extracted_data = {}
         self.reviewed_by = None
         self.reviewed_at = None
         self.rejected_at = None

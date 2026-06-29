@@ -88,6 +88,9 @@ onboarding/
 # local scripts
 local_scripts/
 
+# Real ID / OCR document images used to manually test the AI validation.
+test-data/
+
 # Firebase service account
 secrets/*
 !secrets/.gitkeep
