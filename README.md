@@ -3,7 +3,7 @@
 Django REST Framework + GeoDjango backend for the SnapFix home-services platform.
 Handles customer bookings, provider onboarding & matching, FSM-driven service-request
 lifecycle, multi-method payment settlement (cash / card / wallet), and AI-powered
-provider recommendation with a multi-provider scoring engine (OpenAI, Gemini, Groq, Anthropic).
+provider recommendation with a multi-provider scoring engine (Anthropic, OpenAI, Gemini, Groq).
 
 ## Prerequisites
 

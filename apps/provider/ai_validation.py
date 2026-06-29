@@ -11,7 +11,7 @@ via Django Admin → Constance. Disable it to skip the API call and
 auto-pass all documents instantly — useful for testing without restarting.
 
 Provider: AI_VALIDATION_PROVIDER in Constance controls which API to use.
-Options: openai, groq, gemini, anthropic, all.
+Options: anthropic, openai, groq, gemini, all.
 If 'all' is selected, the pipeline falls back to the next provider upon
 failure. Each provider call is retried up to 3 times for transient errors
 (network, timeout, rate-limit, 5xx). Non-transient errors (missing API key,
@@ -447,10 +447,10 @@ def _call_anthropic(system, text, docs):
 
 
 _PROVIDERS = {
+    "anthropic": _call_anthropic,
     "openai": _call_openai,
     "gemini": _call_gemini,
     "groq": _call_groq,
-    "anthropic": _call_anthropic,
 }
 
 
@@ -532,7 +532,7 @@ def validate_onboarding(onboarding) -> dict:
         provider_setting = "all"
 
     if provider_setting == "all":
-        provider_list = ["openai", "gemini", "groq", "anthropic"]
+        provider_list = ["anthropic", "openai", "gemini", "groq"]
     elif provider_setting in _PROVIDERS:
         provider_list = [provider_setting]
     else:
@@ -540,7 +540,7 @@ def validate_onboarding(onboarding) -> dict:
             "ai_validation: unknown provider '%s', falling back to 'all'",
             provider_setting,
         )
-        provider_list = ["openai", "gemini", "groq", "anthropic"]
+        provider_list = ["anthropic", "openai", "gemini", "groq"]
 
     last_error_result = None
     last_error_message = "unknown error"

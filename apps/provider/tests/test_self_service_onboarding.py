@@ -1101,14 +1101,14 @@ class AiValidationFallbackTests(TestCase):
             "overall_confidence": 0.90,
         }
 
-        def _fail_openai(system, text, docs):
-            raise ValueError("OPENAI_API_KEY not set")
+        def _fail_anthropic(system, text, docs):
+            raise ValueError("ANTHROPIC_API_KEY not set")
 
         providers_patch = {
-            "openai": _fail_openai,
+            "anthropic": _fail_anthropic,
+            "openai": self._mock_provider(good_report),
             "gemini": self._mock_provider(good_report),
             "groq": self._mock_provider(good_report),
-            "anthropic": self._mock_provider(good_report),
         }
         with patch.dict("apps.provider.ai_validation._PROVIDERS", providers_patch):
             provider = _make_pending_provider()

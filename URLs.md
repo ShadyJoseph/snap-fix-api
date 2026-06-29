@@ -345,7 +345,7 @@ Self-service from the mobile app — no office visit required.
 3. Upload documents → PATCH /onboarding/documents/
 4. Submit for review → POST /onboarding/submit/
    - Status moves to "pending".
-   - AI validates documents automatically (multi-provider pipeline: OpenAI GPT-4o-mini, Google Gemini, Groq Llama, Anthropic Claude; configured via Constance → AI_VALIDATION_PROVIDER).
+   - AI validates documents automatically (multi-provider pipeline: Anthropic Claude, OpenAI GPT-4o-mini, Google Gemini, Groq Llama; configured via Constance → AI_VALIDATION_PROVIDER).
 5. Poll for updates → GET /onboarding/status/
 6. Staff make the final decision via the Admin Dashboard:
    - approved → verification_status → "verified" + FCM push

@@ -2,7 +2,7 @@
 AI-powered provider recommendation reasoning.
 
 Mirrors apps/provider/ai_validation.py in architecture:
-  - Same multi-provider registry (OpenAI, Gemini, Groq, Anthropic)
+  - Same multi-provider registry (Anthropic, OpenAI, Gemini, Groq)
   - Same Constance runtime config (AI_RECOMMENDATION_ENABLED, AI_RECOMMENDATION_PROVIDER)
   - Same _is_transient() / retry / fallback / _clean_json() pattern
   - Never raises — every error path returns a generic reason string
@@ -270,10 +270,10 @@ def _call_anthropic(system: str, prompt: str) -> str:
 
 
 _PROVIDERS = {
+    "anthropic": _call_anthropic,
     "openai": _call_openai,
     "gemini": _call_gemini,
     "groq": _call_groq,
-    "anthropic": _call_anthropic,
 }
 
 _MODEL_IDS = {
@@ -347,7 +347,7 @@ def generate_recommendation_reasons(
     plain-text reasons derived from signal scores when all providers fail.
 
     Feature flag: AI_RECOMMENDATION_ENABLED in Constance.
-    Provider:     AI_RECOMMENDATION_PROVIDER in Constance (openai/groq/gemini/anthropic/all).
+    Provider:     AI_RECOMMENDATION_PROVIDER in Constance (anthropic/openai/groq/gemini/all).
 
     Writes an AIRecommendationLog row for every call (including bypasses and errors).
     Pass the saved ServiceRequest instance if available so the log can be linked.
@@ -380,7 +380,7 @@ def generate_recommendation_reasons(
     provider_setting = provider_setting.lower()
 
     if provider_setting == "all":
-        provider_list = ["openai", "gemini", "groq", "anthropic"]
+        provider_list = ["anthropic", "openai", "gemini", "groq"]
     elif provider_setting in _PROVIDERS:
         provider_list = [provider_setting]
     else:
@@ -388,7 +388,7 @@ def generate_recommendation_reasons(
             "ai_recommendation: unknown provider '%s', falling back to 'all'",
             provider_setting,
         )
-        provider_list = ["openai", "gemini", "groq", "anthropic"]
+        provider_list = ["anthropic", "openai", "gemini", "groq"]
 
     for provider_name in provider_list:
         provider_fn = _PROVIDERS[provider_name]

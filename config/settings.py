@@ -235,7 +235,7 @@ CONSTANCE_CONFIG = {
     ),
     "AI_VALIDATION_PROVIDER": (
         "all",
-        "Which AI provider to use. Choices: openai, groq, gemini, anthropic, all.",
+        "Which AI provider to use. Choices: anthropic, openai, groq, gemini, all.",
         str,
     ),
     "AI_RECOMMENDATION_ENABLED": (
@@ -246,7 +246,7 @@ CONSTANCE_CONFIG = {
     ),
     "AI_RECOMMENDATION_PROVIDER": (
         "all",
-        "Which AI provider to use for recommendation reasons. Choices: openai, groq, gemini, anthropic, all.",
+        "Which AI provider to use for recommendation reasons. Choices: anthropic, openai, groq, gemini, all.",
         str,
     ),
     # Onboarding rules

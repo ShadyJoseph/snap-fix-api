@@ -135,8 +135,8 @@ MIME detection uses `mimetypes.guess_type`. Unknown types are treated as `image/
 
 | Setting | Behaviour |
 |---------|-----------|
-| `"openai"` / `"gemini"` / `"groq"` / `"anthropic"` | Use that provider only |
-| `"all"` (default) | Try providers in order: openai → gemini → groq → anthropic; move to next on failure |
+| `"anthropic"` / `"openai"` / `"gemini"` / `"groq"` | Use that provider only |
+| `"all"` (default) | Try providers in order: anthropic → openai → gemini → groq; move to next on failure |
 
 ### Step 4 — Retry loop
 
@@ -161,10 +161,10 @@ def _call_<provider>(system, text, docs) -> (report_dict, raw_str, latency_ms, i
 
 | Provider | Model | PDF support |
 |----------|-------|-------------|
-| OpenAI | `gpt-4o-mini` | No — sends a text note instead of inline PDF |
-| Groq | `meta-llama/llama-4-scout-17b-16e-instruct` | No — same as OpenAI |
-| Gemini | `gemini-2.0-flash` | Yes — `inline_data` with `mime_type=application/pdf` |
 | Anthropic | `claude-haiku-4-5-20251001` | Yes — `document` content block |
+| OpenAI | `gpt-4o-mini` | No — sends a text note instead of inline PDF |
+| Gemini | `gemini-2.0-flash` | Yes — `inline_data` with `mime_type=application/pdf` |
+| Groq | `meta-llama/llama-4-scout-17b-16e-instruct` | No — same as OpenAI |
 
 **PDF handling:** Anthropic and Gemini receive PDFs natively. OpenAI and Groq receive a text note: `"(application/pdf document was provided but cannot be visually inspected by this model)"` so they can still reason about what was submitted even without seeing it.
 
@@ -317,11 +317,11 @@ All tuneable settings are in Django Admin → **Constance → Change** — no re
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `AI_VALIDATION_ENABLED` | bool | `True` | `False` bypasses all API calls and auto-passes every submission |
-| `AI_VALIDATION_PROVIDER` | str | `"all"` | Which adapter(s) to use: `openai`, `gemini`, `groq`, `anthropic`, `all` |
+| `AI_VALIDATION_PROVIDER` | str | `"all"` | Which adapter(s) to use: `anthropic`, `openai`, `gemini`, `groq`, `all` |
 | `ONBOARDING_REJECTION_COOLDOWN_DAYS` | int | `30` | Days before a rejected provider can resubmit |
 | `ONBOARDING_MAX_FILE_SIZE_MB` | int | `5` | Max upload size per document (enforced at model `clean()`) |
 | `AI_RECOMMENDATION_ENABLED` | bool | `True` | `False` skips AI calls on recommended bookings and returns plain-text reasons |
-| `AI_RECOMMENDATION_PROVIDER` | str | `"all"` | Which adapter(s) to use for provider recommendations: `openai`, `gemini`, `groq`, `anthropic`, `all` |
+| `AI_RECOMMENDATION_PROVIDER` | str | `"all"` | Which adapter(s) to use for provider recommendations: `anthropic`, `openai`, `gemini`, `groq`, `all` |
 
 **Operational tips:**
 - Set `AI_VALIDATION_ENABLED = False` during load tests or when all AI APIs are degraded — applications still queue normally for staff review.
@@ -460,9 +460,9 @@ All tuneable settings are in Django Admin → **Constance → Change** — no re
 validate_onboarding_documents (Celery)
     └── validate_onboarding (ai_validation.py)
             ├── _encode_file() × 2–4      [disk reads, no network]
-            ├── _call_openai()             [api.openai.com]      ← if configured
+            ├── _call_anthropic()          [api.anthropic.com]   ← if configured
+            ├── _call_openai()             [api.openai.com]
             ├── _call_gemini()             [generativelanguage.googleapis.com]
-            ├── _call_groq()               [api.groq.com]
-            └── _call_anthropic()          [api.anthropic.com]
+            └── _call_groq()               [api.groq.com]
                                            (first success wins; others skipped)
 ```

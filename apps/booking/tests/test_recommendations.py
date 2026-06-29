@@ -441,16 +441,14 @@ class GenerateRecommendationReasonsTests(TestCase):
         reason = "Fallback provider worked."
         self.mock_cfg.AI_RECOMMENDATION_PROVIDER = "all"
 
-        def _fail_openai(system, prompt):
-            raise ValueError("OPENAI_API_KEY not set")
+        def _fail_anthropic(system, prompt):
+            raise ValueError("ANTHROPIC_API_KEY not set")
 
         providers_patch = {
-            "openai": _fail_openai,
-            "gemini": _ai_provider_fn({str(self.provider.pk): reason}),
+            "anthropic": _fail_anthropic,
+            "openai": _ai_provider_fn({str(self.provider.pk): reason}),
+            "gemini": _failing_ai_provider(AssertionError("should not reach gemini")),
             "groq": _failing_ai_provider(AssertionError("should not reach groq")),
-            "anthropic": _failing_ai_provider(
-                AssertionError("should not reach anthropic")
-            ),
         }
         with patch.dict("apps.booking.ai_recommendation._PROVIDERS", providers_patch):
             result = self._call()
@@ -460,7 +458,7 @@ class GenerateRecommendationReasonsTests(TestCase):
         self.mock_cfg.AI_RECOMMENDATION_PROVIDER = "all"
         providers_patch = {
             name: _failing_ai_provider(ValueError("key not set"))
-            for name in ("openai", "gemini", "groq", "anthropic")
+            for name in ("anthropic", "openai", "gemini", "groq")
         }
         with patch.dict("apps.booking.ai_recommendation._PROVIDERS", providers_patch):
             result = self._call()
@@ -472,7 +470,7 @@ class GenerateRecommendationReasonsTests(TestCase):
         self.mock_cfg.AI_RECOMMENDATION_PROVIDER = "all"
         providers_patch = {
             name: _failing_ai_provider(ValueError("key not set"))
-            for name in ("openai", "gemini", "groq", "anthropic")
+            for name in ("anthropic", "openai", "gemini", "groq")
         }
         with patch.dict("apps.booking.ai_recommendation._PROVIDERS", providers_patch):
             self._call()
@@ -1180,7 +1178,7 @@ class AIRecommendationLogTests(TestCase):
         self.mock_cfg.AI_RECOMMENDATION_PROVIDER = "all"
         providers_patch = {
             name: _failing_ai_provider(ValueError("no key"))
-            for name in ("openai", "gemini", "groq", "anthropic")
+            for name in ("anthropic", "openai", "gemini", "groq")
         }
         with patch.dict("apps.booking.ai_recommendation._PROVIDERS", providers_patch):
             self._call()
